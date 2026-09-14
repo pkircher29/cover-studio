@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cover Studio</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="wordmark">Cover Studio</div>
+  <div class="status" id="status">
+    <span class="status-dot" id="statusDot"></span>
+    <span id="statusText">checking engine&hellip;</span>
+  </div>
+</header>
+
+<main class="rack">
+
+  <section class="panel" data-tab="source">
+    <div class="panel-head">
+      <h2>Source</h2>
+      <p class="panel-sub">Drop in the recording. Lyrics and melody are read automatically &mdash; nothing else to fill in here.</p>
+    </div>
+    <div class="panel-body">
+      <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-label="Choose a source recording">
+        <div class="dropzone-inner">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M12 3v12" stroke-linecap="round"/><path d="M7 10l5 5 5-5" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 19h16" stroke-linecap="round"/></svg>
+          <span id="dropLabel">Drop a WAV or MP3 here, or click to browse</span>
+        </div>
+        <input type="file" id="fileInput" accept="audio/*" hidden>
+      </div>
+
+      <div class="source-player" id="sourcePlayer" hidden>
+        <audio id="sourceAudio" controls></audio>
+        <span class="filename" id="sourceFilename"></span>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel" data-tab="styles">
+    <div class="panel-head">
+      <h2>Styles</h2>
+      <p class="panel-sub">Pick as many as you want &mdash; each one becomes its own finished cover.</p>
+    </div>
+    <div class="panel-body">
+      <div class="style-grid" id="styleGrid"></div>
+
+      <div class="field-grid" style="margin-top:18px">
+        <label class="field">
+          <span class="field-label">Melody adherence</span>
+          <select id="cotSelect">
+            <option value="melody" selected>Melody &mdash; keep the tune, free the arrangement</option>
+            <option value="full">Full &mdash; keep tune and harmony</option>
+            <option value="off">Off &mdash; ignore the transcribed score</option>
+          </select>
+        </label>
+        <label class="field field-narrow">
+          <span class="field-label">Seed</span>
+          <input type="number" id="seedInput" value="831001" min="0">
+        </label>
+        <label class="field field-narrow">
+          <span class="field-label">Steps</span>
+          <input type="number" id="stepsInput" value="16" min="1" max="64">
+        </label>
+        <label class="field field-narrow">
+          <span class="field-label">Vocal</span>
+          <select id="vocalSelect">
+            <option value="any" selected>Any</option>
+            <option value="male">Male</option>
+            <option value="female">Female</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="row">
+        <label class="checkbox-row">
+          <input type="checkbox" id="flipKeyInput">
+          <span>Flip major/minor key <span class="hint">(major becomes minor, minor becomes major, before generating)</span></span>
+        </label>
+      </div>
+
+      <div class="row">
+        <button class="btn btn-primary btn-large" id="runBtn" disabled>Make covers</button>
+        <span class="hint" id="runHint">Transcribes lyrics and melody, then generates every style you picked, one at a time. Runs on CPU &mdash; each style takes a few minutes.</span>
+      </div>
+
+      <div class="progress" id="progress" hidden>
+        <div class="progress-head">
+          <div class="progress-pulse" id="progressPulse" aria-hidden="true">
+            <span></span><span></span><span></span><span></span><span></span>
+          </div>
+          <span class="progress-elapsed" id="progressElapsed">0:00</span>
+          <span class="progress-label" id="progressStageLabel"></span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel" data-tab="results">
+    <div class="panel-head">
+      <h2>Covers</h2>
+      <p class="panel-sub">Finished takes are saved to <code>completed/</code> as soon as each one is done &mdash; a crash mid-run never loses what already finished.</p>
+    </div>
+    <div class="panel-body">
+      <div class="result-empty" id="resultsEmpty">Nothing generated yet.</div>
+      <div class="style-results" id="styleResults"></div>
+    </div>
+  </section>
+
+</main>
+
+<div class="toast" id="toast" hidden></div>
+
+<script src="app.js"></script>
+</body>
+</html>
