@@ -106,9 +106,13 @@ function selectedStyleIds() {
 
 // ---- Batch run, with live progress ----
 
-function watchBatch(batchId, onProgress) {
+function watchBatch(batchId, onProgress, onReconnecting) {
   return new Promise((resolve, reject) => {
     const source = new EventSource(`/api/covers/${batchId}/events`);
+
+    source.addEventListener("open", () => {
+      if (onReconnecting) onReconnecting(false);
+    });
 
     source.addEventListener("progress", (evt) => {
       onProgress(JSON.parse(evt.data));
@@ -124,9 +128,17 @@ function watchBatch(batchId, onProgress) {
       }
     });
 
+    // A dropped connection (a backgrounded tab throttling, a brief network
+    // blip) is transient: the browser retries on its own as long as we
+    // don't close() here. The batch keeps running server-side regardless of
+    // whether anyone's watching, so just surface "reconnecting" and let it
+    // recover instead of giving up on the first hiccup.
     source.onerror = () => {
-      source.close();
-      reject(new Error("Lost connection to the progress stream."));
+      if (source.readyState === EventSource.CLOSED) {
+        reject(new Error("Lost connection to the progress stream."));
+      } else if (onReconnecting) {
+        onReconnecting(true);
+      }
     };
   });
 }
@@ -204,12 +216,20 @@ runBtn.addEventListener("click", async () => {
     }
     const { batch_id } = await startRes.json();
 
-    await watchBatch(batch_id, (data) => {
-      progressElapsed.textContent = formatElapsed(data.elapsed_s);
-      progressPulse.classList.toggle("is-active", !!data.engine_active);
-      progressStageLabel.textContent = data.stage;
-      data.styles.forEach(renderStyleResult);
-    });
+    await watchBatch(
+      batch_id,
+      (data) => {
+        progressElapsed.textContent = formatElapsed(data.elapsed_s);
+        progressPulse.classList.toggle("is-active", !!data.engine_active);
+        progressStageLabel.textContent = data.stage;
+        data.styles.forEach(renderStyleResult);
+      },
+      (isReconnecting) => {
+        if (isReconnecting) {
+          progressStageLabel.textContent += " (reconnecting… the run itself is still going)";
+        }
+      }
+    );
 
     showToast("Cover run complete.");
   } catch (err) {
