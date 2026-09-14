@@ -344,10 +344,10 @@ _APP_PROCESS = psutil.Process(os.getpid())
 
 
 def _job_activity(job: Job) -> bool:
-    # A "generate" job's real work happens in the audio.cpp engine process;
-    # a "transcribe" job runs in-process (SheetSage2, via a threadpool), so
-    # it's this app's own process that's actually busy.
-    proc = _engine_process() if job.kind == "generate" else _APP_PROCESS
+    # "generate" and "transcribe_lyrics" jobs do their real work in the
+    # audio.cpp engine process; a plain "transcribe" (melody, SheetSage2)
+    # runs in-process via a threadpool, so it's this app's own process.
+    proc = _engine_process() if job.kind in ("generate", "transcribe_lyrics") else _APP_PROCESS
     if proc is None:
         return False
     try:
@@ -454,6 +454,7 @@ async def _run_batch(
     source_path: str,
     tmp_dir: str,
     source_name: str,
+    lyrics: str,
     cot: str,
     seed: int,
     num_inference_steps: int,
@@ -461,13 +462,6 @@ async def _run_batch(
     vocal: str = "any",
 ) -> None:
     try:
-        batch.stage = "Transcribing lyrics"
-        batch.phase = "engine"
-        try:
-            lyrics = await _call_yue2_transcribe_lyrics(source_path)
-        except Exception as exc:
-            lyrics = ""
-            log.warning("lyrics transcription failed, continuing without lyrics: %s", exc)
         if not lyrics.strip():
             lyrics = "[Verse]\n(instrumental - no lyrics detected)"
 
@@ -518,9 +512,55 @@ async def list_styles():
     return {"styles": [{"id": s["id"], "label": s["label"]} for s in STYLE_PRESETS]}
 
 
-@app.post("/api/covers")
-async def start_covers(
-    file: UploadFile = File(...),
+@dataclass
+class Session:
+    id: str
+    source_path: str
+    tmp_dir: str
+    source_name: str
+
+
+SESSIONS: dict[str, Session] = {}
+
+
+async def _run_lyrics_job(job: Job, audio_path: str) -> None:
+    job.stage = "Transcribing lyrics"
+    try:
+        lyrics = await _call_yue2_transcribe_lyrics(audio_path)
+        job.result = {"lyrics": lyrics}
+        job.status = "done"
+        job.stage = "Done"
+    except Exception as exc:  # noqa: BLE001 - surfaced to the client as-is
+        job.status = "error"
+        job.error = f"Lyrics transcription failed: {exc}"
+
+
+@app.post("/api/covers/prepare")
+async def prepare_covers(file: UploadFile = File(...)):
+    """Upload the source recording and kick off lyrics transcription only.
+    The frontend shows the result for review/editing before the (much
+    longer) melody transcription + generation phase starts."""
+    tmp_dir = tempfile.mkdtemp(prefix="cover-studio-batch-")
+    suffix = Path(file.filename or "source.wav").suffix or ".wav"
+    source_path = Path(tmp_dir) / f"source{suffix}"
+    source_path.write_bytes(await file.read())
+
+    session = Session(
+        id=uuid.uuid4().hex, source_path=str(source_path), tmp_dir=tmp_dir,
+        source_name=file.filename or "source",
+    )
+    SESSIONS[session.id] = session
+
+    job = Job(id=uuid.uuid4().hex, kind="transcribe_lyrics")
+    JOBS[job.id] = job
+    asyncio.create_task(_run_lyrics_job(job, session.source_path))
+    return {"session_id": session.id, "job_id": job.id}
+
+
+@app.post("/api/covers/{session_id}/generate")
+async def generate_covers(
+    session_id: str,
+    lyrics: str = Form(...),
     styles: str = Form(...),
     cot: str = Form("melody"),
     seed: int = Form(831001),
@@ -528,6 +568,10 @@ async def start_covers(
     flip_key: bool = Form(False),
     vocal: str = Form("any"),
 ):
+    session = SESSIONS.get(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="unknown or already-used session")
+
     style_ids = json.loads(styles)
     unknown = [s for s in style_ids if s not in STYLE_PRESETS_BY_ID]
     if unknown:
@@ -535,11 +579,7 @@ async def start_covers(
     if not style_ids:
         raise HTTPException(status_code=400, detail="Select at least one style.")
 
-    tmp_dir = tempfile.mkdtemp(prefix="cover-studio-batch-")
-    suffix = Path(file.filename or "source.wav").suffix or ".wav"
-    source_path = Path(tmp_dir) / f"source{suffix}"
-    source_path.write_bytes(await file.read())
-
+    del SESSIONS[session_id]
     batch = Batch(
         id=uuid.uuid4().hex,
         styles=[StyleRun(id=sid, label=STYLE_PRESETS_BY_ID[sid]["label"]) for sid in style_ids],
@@ -547,8 +587,8 @@ async def start_covers(
     BATCHES[batch.id] = batch
     asyncio.create_task(
         _run_batch(
-            batch, str(source_path), tmp_dir, file.filename or "source",
-            cot, seed, num_inference_steps, flip_key, vocal,
+            batch, session.source_path, session.tmp_dir, session.source_name,
+            lyrics, cot, seed, num_inference_steps, flip_key, vocal,
         )
     )
     return {"batch_id": batch.id}

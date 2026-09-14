@@ -24,7 +24,7 @@
   <section class="panel" data-tab="source">
     <div class="panel-head">
       <h2>Source</h2>
-      <p class="panel-sub">Drop in the recording. Lyrics and melody are read automatically &mdash; nothing else to fill in here.</p>
+      <p class="panel-sub">Drop in the recording, then transcribe the lyrics &mdash; you'll get a chance to fix them before anything is generated.</p>
     </div>
     <div class="panel-body">
       <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-label="Choose a source recording">
@@ -39,10 +39,35 @@
         <audio id="sourceAudio" controls></audio>
         <span class="filename" id="sourceFilename"></span>
       </div>
+
+      <div class="row">
+        <button class="btn btn-primary" id="transcribeBtn" disabled>Transcribe lyrics</button>
+        <span class="hint" id="transcribeHint">Speech-to-text over the vocals. Runs on the engine &mdash; usually under a minute.</span>
+      </div>
+
+      <div class="progress progress-simple" id="lyricsProgress" hidden>
+        <div class="progress-head">
+          <div class="progress-pulse" id="lyricsPulse" aria-hidden="true">
+            <span></span><span></span><span></span><span></span><span></span>
+          </div>
+          <span class="progress-elapsed" id="lyricsElapsed">0:00</span>
+          <span class="progress-label" id="lyricsStageLabel">Transcribing lyrics&hellip;</span>
+        </div>
+      </div>
     </div>
   </section>
 
-  <section class="panel" data-tab="styles">
+  <section class="panel is-locked" data-tab="lyrics" id="lyricsPanel">
+    <div class="panel-head">
+      <h2>Lyrics</h2>
+      <p class="panel-sub">What the model heard. Fix any misheard words, names, or ad-libs before it shapes the cover.</p>
+    </div>
+    <div class="panel-body">
+      <textarea id="lyricsText" class="abc-input" rows="8" placeholder="Transcribed lyrics will appear here." spellcheck="true"></textarea>
+    </div>
+  </section>
+
+  <section class="panel is-locked" data-tab="styles" id="stylesPanel">
     <div class="panel-head">
       <h2>Styles</h2>
       <p class="panel-sub">Pick as many as you want &mdash; each one becomes its own finished cover.</p>
@@ -86,7 +111,7 @@
 
       <div class="row">
         <button class="btn btn-primary btn-large" id="runBtn" disabled>Make covers</button>
-        <span class="hint" id="runHint">Transcribes lyrics and melody, then generates every style you picked, one at a time. Runs on CPU &mdash; each style takes a few minutes.</span>
+        <span class="hint" id="runHint">Transcribes the melody, then generates every style you picked, one at a time, using the lyrics above. Runs on CPU &mdash; each style takes a few minutes.</span>
       </div>
 
       <div class="progress" id="progress" hidden>

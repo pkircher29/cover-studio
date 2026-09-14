@@ -16,10 +16,23 @@ const styleResults = $("styleResults");
 const toast = $("toast");
 const statusDot = $("statusDot");
 const statusText = $("statusText");
+const transcribeBtn = $("transcribeBtn");
+const lyricsPanel = $("lyricsPanel");
+const lyricsText = $("lyricsText");
+const stylesPanel = $("stylesPanel");
+const lyricsProgress = $("lyricsProgress");
+const lyricsPulse = $("lyricsPulse");
+const lyricsElapsed = $("lyricsElapsed");
+const lyricsStageLabel = $("lyricsStageLabel");
 
 let selectedFile = null;
+let sessionId = null;
 let toastTimer = null;
 const styleRowById = {};
+
+function unlock(panel) {
+  panel.classList.remove("is-locked");
+}
 
 function showToast(message) {
   toast.textContent = message;
@@ -47,7 +60,7 @@ function handleFile(file) {
   sourceAudio.src = URL.createObjectURL(file);
   sourceFilename.textContent = file.name;
   sourcePlayer.hidden = false;
-  runBtn.disabled = false;
+  transcribeBtn.disabled = false;
 }
 
 dropzone.addEventListener("click", () => fileInput.click());
@@ -104,11 +117,11 @@ function selectedStyleIds() {
   return Array.from(styleGrid.querySelectorAll("input:checked")).map((el) => el.value);
 }
 
-// ---- Batch run, with live progress ----
+// ---- Shared SSE progress watcher (single jobs and batches alike) ----
 
-function watchBatch(batchId, onProgress, onReconnecting) {
+function watchEvents(eventsUrl, onProgress, onReconnecting) {
   return new Promise((resolve, reject) => {
-    const source = new EventSource(`/api/covers/${batchId}/events`);
+    const source = new EventSource(eventsUrl);
 
     source.addEventListener("open", () => {
       if (onReconnecting) onReconnecting(false);
@@ -185,8 +198,62 @@ function renderStyleResult(style) {
   }
 }
 
-runBtn.addEventListener("click", async () => {
+// ---- Transcribe lyrics (review/edit before generating) ----
+
+transcribeBtn.addEventListener("click", async () => {
   if (!selectedFile) return;
+
+  setBusy(transcribeBtn, "Transcribing…", true, "Transcribe lyrics");
+  lyricsProgress.hidden = false;
+  lyricsPulse.classList.remove("is-active");
+  lyricsElapsed.textContent = "0:00";
+  lyricsStageLabel.textContent = "Transcribing lyrics…";
+
+  const form = new FormData();
+  form.append("file", selectedFile);
+
+  try {
+    const startRes = await fetch("/api/covers/prepare", { method: "POST", body: form });
+    if (!startRes.ok) {
+      const detail = await startRes.text();
+      throw new Error(detail || `Could not start (${startRes.status})`);
+    }
+    const { session_id, job_id } = await startRes.json();
+    sessionId = session_id;
+
+    await watchEvents(
+      `/api/jobs/${job_id}/events`,
+      (data) => {
+        lyricsElapsed.textContent = formatElapsed(data.elapsed_s);
+        lyricsPulse.classList.toggle("is-active", !!data.engine_active);
+      },
+      (isReconnecting) => {
+        if (isReconnecting) lyricsStageLabel.textContent = "Reconnecting… still transcribing";
+      }
+    );
+
+    const res = await fetch(`/api/jobs/${job_id}/result`);
+    if (!res.ok) {
+      const detail = await res.text();
+      throw new Error(detail || `Transcription failed (${res.status})`);
+    }
+    const data = await res.json();
+    lyricsText.value = data.lyrics || "";
+    unlock(lyricsPanel);
+    unlock(stylesPanel);
+    runBtn.disabled = false;
+  } catch (err) {
+    showToast(err.message || "Lyrics transcription failed.");
+  } finally {
+    setBusy(transcribeBtn, "Transcribing…", false, "Transcribe lyrics");
+    lyricsPulse.classList.remove("is-active");
+  }
+});
+
+// ---- Generate (uses the session from the transcribe step + edited lyrics) ----
+
+runBtn.addEventListener("click", async () => {
+  if (!sessionId) { showToast("Transcribe lyrics first."); return; }
   const styleIds = selectedStyleIds();
   if (styleIds.length === 0) { showToast("Pick at least one style."); return; }
 
@@ -200,7 +267,7 @@ runBtn.addEventListener("click", async () => {
   Object.keys(styleRowById).forEach((k) => delete styleRowById[k]);
 
   const form = new FormData();
-  form.append("file", selectedFile);
+  form.append("lyrics", lyricsText.value);
   form.append("styles", JSON.stringify(styleIds));
   form.append("cot", $("cotSelect").value);
   form.append("seed", $("seedInput").value || "831001");
@@ -209,15 +276,16 @@ runBtn.addEventListener("click", async () => {
   form.append("vocal", $("vocalSelect").value);
 
   try {
-    const startRes = await fetch("/api/covers", { method: "POST", body: form });
+    const startRes = await fetch(`/api/covers/${sessionId}/generate`, { method: "POST", body: form });
     if (!startRes.ok) {
       const detail = await startRes.text();
       throw new Error(detail || `Could not start (${startRes.status})`);
     }
     const { batch_id } = await startRes.json();
+    sessionId = null; // the session is consumed server-side once generation starts
 
-    await watchBatch(
-      batch_id,
+    await watchEvents(
+      `/api/covers/${batch_id}/events`,
       (data) => {
         progressElapsed.textContent = formatElapsed(data.elapsed_s);
         progressPulse.classList.toggle("is-active", !!data.engine_active);
