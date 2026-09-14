@@ -15,6 +15,7 @@ import logging
 import os
 import re
 import shutil
+import subprocess
 import tempfile
 import time
 import uuid
@@ -300,6 +301,20 @@ async def _call_yue2_generate(body: dict, on_stage=None) -> bytes:
             watcher.cancel()
 
 
+def _ensure_wav(audio_path: str) -> str:
+    """The engine's ASR endpoint only accepts WAV. Source uploads can be any
+    format (mp3, m4a, ...), so transcode to a temp WAV alongside it first."""
+    path = Path(audio_path)
+    if path.suffix.lower() == ".wav":
+        return audio_path
+    wav_path = path.with_name(path.stem + "_asr.wav")
+    subprocess.run(
+        ["ffmpeg", "-y", "-i", str(path), "-ac", "1", "-ar", "44100", "-c:a", "pcm_s16le", str(wav_path)],
+        check=True, capture_output=True,
+    )
+    return str(wav_path)
+
+
 async def _call_yue2_transcribe_lyrics(audio_path: str) -> str:
     """Speech-to-text over the source recording via the engine's ASR model.
 
@@ -307,10 +322,11 @@ async def _call_yue2_transcribe_lyrics(audio_path: str) -> str:
     get misidentified as a different language entirely. Pin it to English
     since that's this app's only supported lyrics language.
     """
+    wav_path = await run_in_threadpool(_ensure_wav, audio_path)
     async with httpx.AsyncClient(timeout=None) as client:
         res = await client.post(
             f"{AUDIOCPP_URL}/v1/audio/transcriptions",
-            json={"model": ASR_MODEL_ID, "audio": audio_path, "language": "en"},
+            json={"model": ASR_MODEL_ID, "audio": wav_path, "language": "en"},
         )
     if res.status_code != 200:
         raise RuntimeError(f"Lyrics transcription failed: {res.status_code} {res.text[:300]}")
