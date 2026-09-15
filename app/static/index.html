@@ -13,6 +13,27 @@
 
 <header class="topbar">
   <div class="wordmark">Cover Studio</div>
+  <div class="vram-gauge" id="vramGauge" hidden>
+    <svg viewBox="0 0 200 116" width="108" height="63" aria-hidden="true">
+      <defs>
+        <linearGradient id="vramGaugeGrad" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0%" stop-color="#4caf5f"/>
+          <stop offset="50%" stop-color="#e0c23a"/>
+          <stop offset="100%" stop-color="#d9483f"/>
+        </linearGradient>
+      </defs>
+      <path d="M 16 108 A 84 84 0 0 1 184 108" fill="none" stroke="#243638" stroke-width="14" stroke-linecap="round"/>
+      <path d="M 16 108 A 84 84 0 0 1 184 108" fill="none" stroke="url(#vramGaugeGrad)" stroke-width="14" stroke-linecap="round"/>
+      <g id="vramNeedle" style="transform-origin: 100px 108px; transform: rotate(-90deg); transition: transform 0.5s ease-out;">
+        <line x1="100" y1="108" x2="100" y2="38" stroke="#e9e4d8" stroke-width="3" stroke-linecap="round"/>
+        <circle cx="100" cy="108" r="6" fill="#e9e4d8"/>
+      </g>
+    </svg>
+    <div class="vram-readout">
+      <span class="vram-pct" id="vramPct">&ndash;</span>
+      <span class="vram-label" id="vramLabel">VRAM</span>
+    </div>
+  </div>
   <div class="status" id="status">
     <span class="status-dot" id="statusDot"></span>
     <span id="statusText">checking engine&hellip;</span>
@@ -74,6 +95,30 @@
     </div>
     <div class="panel-body">
       <div class="style-grid" id="styleGrid"></div>
+
+      <div class="row" style="margin-top:10px">
+        <button class="btn btn-secondary" id="manageStylesBtn" type="button">Manage styles</button>
+        <span class="hint">Edit the wording of any preset, or add your own &mdash; changes are saved to <code>styles.json</code>.</span>
+      </div>
+
+      <div class="style-manager" id="styleManager" hidden>
+        <div class="style-editor-list" id="styleEditorList"></div>
+
+        <div class="style-editor-card style-editor-new">
+          <span class="field-label">Add a style</span>
+          <label class="field">
+            <span class="field-label">Name</span>
+            <input type="text" id="newStyleLabel" placeholder="e.g. Bossa Nova">
+          </label>
+          <label class="field">
+            <span class="field-label">Prompt</span>
+            <textarea id="newStylePrompt" rows="2" placeholder="English, bossa nova, nylon guitar, soft brushes, breathy vocal&hellip;"></textarea>
+          </label>
+          <div class="row">
+            <button class="btn btn-primary" id="addStyleBtn" type="button">Add style</button>
+          </div>
+        </div>
+      </div>
 
       <div class="field-grid" style="margin-top:18px">
         <label class="field">
@@ -141,6 +186,6 @@
 
 <div class="toast" id="toast" hidden></div>
 
-<script src="app.js"></script>
+<script src="app.js?v=2"></script>
 </body>
 </html>

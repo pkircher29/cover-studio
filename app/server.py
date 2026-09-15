@@ -44,44 +44,52 @@ ENGINE_PROCESS_NAME = "audiocpp_server.exe"
 COMPLETED_DIR = Path(os.environ.get("COMPLETED_DIR", Path(__file__).parent.parent / "completed"))
 COMPLETED_DIR.mkdir(parents=True, exist_ok=True)
 
-# A dozen-ish style presets covering distinct genres, so a cover run can fan
-# out across several very different takes in one pass. "Keep Original Style"
-# is a baseline take: no genre transform, just a faithful re-render.
-STYLE_PRESETS = [
-    {"id": "keep_original", "label": "Keep Original Style",
-     "prompt": "English, faithful cover, matches the original genre, instrumentation, and production style, natural full-band arrangement, expressive lead vocal"},
-    {"id": "acoustic_folk", "label": "Acoustic Folk",
-     "prompt": "English, acoustic folk, warm fingerpicked guitar, soft brushed drums, intimate vocal"},
-    {"id": "jazz_funk", "label": "Jazz-Funk",
-     "prompt": "English, jazz-funk, warm Rhodes electric piano, round bass, tight drums, relaxed vocal"},
-    {"id": "funk_70s", "label": "70s Funk",
-     "prompt": "English, 1970s funk, wah-wah guitar, slap bass, clavinet, punchy horn stabs, driving drums, gritty confident vocal"},
-    {"id": "soul_50s", "label": "50s Soul",
-     "prompt": "English, 1950s soul, doo-wop backing vocals, warm horns, upright bass, brushed drums, tender emotive lead vocal"},
-    {"id": "synthwave", "label": "Synthwave",
-     "prompt": "English, synthwave, retro analog synths, gated reverb drums, confident vocal"},
-    {"id": "country", "label": "Modern Country",
-     "prompt": "English, modern country, twangy electric guitar, pedal steel, steady drums, warm vocal"},
-    {"id": "house", "label": "Uplifting House",
-     "prompt": "English, uplifting house, four-on-the-floor drums, bright synth stabs, energetic vocal"},
-    {"id": "reggae", "label": "Roots Reggae",
-     "prompt": "English, roots reggae, skanking guitar upstrokes, deep bass, laid-back drums, smooth vocal"},
-    {"id": "punk", "label": "Punk Rock",
-     "prompt": "English, punk rock, distorted power chords, fast drums, raw shouted vocal"},
-    {"id": "lofi", "label": "Lo-fi Hip-Hop",
-     "prompt": "English, lo-fi hip-hop, dusty vinyl crackle, mellow keys, boom-bap drums, chill vocal"},
-    {"id": "gospel", "label": "Gospel Choir",
-     "prompt": "English, gospel, layered choir harmonies, Hammond organ, driving drums, soulful lead vocal"},
-    {"id": "latin_pop", "label": "Latin Pop",
-     "prompt": "English, latin pop, bright nylon guitar, congas, horns, upbeat vocal"},
-    {"id": "metal", "label": "Heavy Metal",
-     "prompt": "English, heavy metal, distorted guitars, double-kick drums, powerful vocal"},
-    {"id": "bluegrass", "label": "Bluegrass",
-     "prompt": "English, bluegrass, banjo rolls, fiddle, upright bass, energetic vocal"},
-    {"id": "city_pop", "label": "City Pop",
-     "prompt": "English, city pop, glossy synths, funky bass, smooth drums, breezy vocal"},
-]
-STYLE_PRESETS_BY_ID = {s["id"]: s for s in STYLE_PRESETS}
+# Style presets covering distinct genres, so a cover run can fan out across
+# several very different takes in one pass. "Keep Original Style" is a
+# baseline take: no genre transform, just a faithful re-render.
+#
+# Presets live in styles.json next to this file (human-readable, hand-editable
+# JSON) rather than hardcoded here, so they can be edited directly or through
+# the "Manage styles" panel in the UI without touching code.
+STYLES_PATH = Path(__file__).parent / "styles.json"
+
+
+def _load_styles() -> list[dict]:
+    if STYLES_PATH.exists():
+        try:
+            return json.loads(STYLES_PATH.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as exc:
+            log.warning("styles.json unreadable (%s), starting from an empty list", exc)
+    return []
+
+
+def _save_styles(presets: list[dict]) -> None:
+    STYLES_PATH.write_text(json.dumps(presets, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def _rebuild_styles_by_id() -> None:
+    STYLE_PRESETS_BY_ID.clear()
+    STYLE_PRESETS_BY_ID.update({s["id"]: s for s in STYLE_PRESETS})
+
+
+def _slugify(label: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "_", label.lower()).strip("_")
+    return slug or "style"
+
+
+def _unique_style_id(label: str) -> str:
+    base = _slugify(label)
+    slug = base
+    n = 2
+    while slug in STYLE_PRESETS_BY_ID:
+        slug = f"{base}_{n}"
+        n += 1
+    return slug
+
+
+STYLE_PRESETS: list[dict] = _load_styles()
+STYLE_PRESETS_BY_ID: dict[str, dict] = {}
+_rebuild_styles_by_id()
 
 app = FastAPI(title="Cover Studio")
 
@@ -126,6 +134,65 @@ def _engine_process() -> psutil.Process | None:
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
     return None
+
+
+_NVIDIA_SMI_PATH: str | None | bool = False  # False = not yet searched
+
+
+def _find_nvidia_smi() -> str | None:
+    """Locate nvidia-smi.exe, caching the result. Its usual home
+    (C:\\Program Files\\NVIDIA Corporation\\NVSMI) isn't always present or on
+    PATH; the driver always ships a copy under System32's DriverStore, but
+    that path fragment (e.g. nvmdsi.inf_amd64_<hash>) changes across driver
+    updates, so it has to be globbed rather than hardcoded."""
+    global _NVIDIA_SMI_PATH
+    if _NVIDIA_SMI_PATH is not False:
+        return _NVIDIA_SMI_PATH  # type: ignore[return-value]
+
+    candidates = [
+        Path(r"C:\Windows\System32\nvidia-smi.exe"),
+        Path(r"C:\Program Files\NVIDIA Corporation\NVSMI\nvidia-smi.exe"),
+    ]
+    for c in candidates:
+        if c.exists():
+            _NVIDIA_SMI_PATH = str(c)
+            return _NVIDIA_SMI_PATH
+
+    driver_store = Path(r"C:\Windows\System32\DriverStore\FileRepository")
+    if driver_store.is_dir():
+        for hit in driver_store.glob("*/nvidia-smi.exe"):
+            _NVIDIA_SMI_PATH = str(hit)
+            return _NVIDIA_SMI_PATH
+
+    _NVIDIA_SMI_PATH = None
+    return None
+
+
+@app.get("/api/gpu/vram")
+async def gpu_vram():
+    smi = _find_nvidia_smi()
+    if smi is None:
+        return {"available": False}
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            smi,
+            "--query-gpu=name,memory.used,memory.total",
+            "--format=csv,noheader,nounits",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5.0)
+        line = stdout.decode("utf-8", "ignore").strip().splitlines()[0]
+        name, used, total = [p.strip() for p in line.split(",")]
+        return {
+            "available": True,
+            "name": name,
+            "used_mib": int(used),
+            "total_mib": int(total),
+        }
+    except Exception as exc:  # nvidia-smi missing, no NVIDIA GPU, parse failure, etc.
+        log.warning("gpu vram query failed: %s", exc)
+        return {"available": False}
 
 
 @dataclass
@@ -526,6 +593,57 @@ async def _run_batch(
 @app.get("/api/styles")
 async def list_styles():
     return {"styles": [{"id": s["id"], "label": s["label"]} for s in STYLE_PRESETS]}
+
+
+@app.get("/api/styles/full")
+async def list_styles_full():
+    """Full preset details (including prompt text) for the styles editor."""
+    return {"styles": STYLE_PRESETS}
+
+
+class StyleIn(BaseModel):
+    label: str
+    prompt: str
+
+
+@app.post("/api/styles")
+async def create_style(body: StyleIn):
+    label = body.label.strip()
+    prompt = body.prompt.strip()
+    if not label or not prompt:
+        raise HTTPException(status_code=400, detail="Label and prompt are required.")
+    preset = {"id": _unique_style_id(label), "label": label, "prompt": prompt}
+    STYLE_PRESETS.append(preset)
+    _rebuild_styles_by_id()
+    _save_styles(STYLE_PRESETS)
+    return {"styles": STYLE_PRESETS}
+
+
+@app.put("/api/styles/{style_id}")
+async def update_style(style_id: str, body: StyleIn):
+    preset = STYLE_PRESETS_BY_ID.get(style_id)
+    if preset is None:
+        raise HTTPException(status_code=404, detail="Unknown style id.")
+    label = body.label.strip()
+    prompt = body.prompt.strip()
+    if not label or not prompt:
+        raise HTTPException(status_code=400, detail="Label and prompt are required.")
+    preset["label"] = label
+    preset["prompt"] = prompt
+    _save_styles(STYLE_PRESETS)
+    return {"styles": STYLE_PRESETS}
+
+
+@app.delete("/api/styles/{style_id}")
+async def delete_style(style_id: str):
+    if style_id not in STYLE_PRESETS_BY_ID:
+        raise HTTPException(status_code=404, detail="Unknown style id.")
+    if len(STYLE_PRESETS) <= 1:
+        raise HTTPException(status_code=400, detail="At least one style must remain.")
+    STYLE_PRESETS[:] = [s for s in STYLE_PRESETS if s["id"] != style_id]
+    _rebuild_styles_by_id()
+    _save_styles(STYLE_PRESETS)
+    return {"styles": STYLE_PRESETS}
 
 
 @dataclass

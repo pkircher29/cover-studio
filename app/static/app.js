@@ -16,6 +16,10 @@ const styleResults = $("styleResults");
 const toast = $("toast");
 const statusDot = $("statusDot");
 const statusText = $("statusText");
+const vramGauge = $("vramGauge");
+const vramNeedle = $("vramNeedle");
+const vramPct = $("vramPct");
+const vramLabel = $("vramLabel");
 const transcribeBtn = $("transcribeBtn");
 const lyricsPanel = $("lyricsPanel");
 const lyricsText = $("lyricsText");
@@ -89,6 +93,7 @@ dropzone.addEventListener("drop", (e) => {
 // ---- Style picker ----
 
 async function loadStyles() {
+  const previouslyChecked = new Set(selectedStyleIds());
   try {
     const res = await fetch("/api/styles");
     const data = await res.json();
@@ -100,6 +105,8 @@ async function loadStyles() {
       const input = document.createElement("input");
       input.type = "checkbox";
       input.value = style.id;
+      input.checked = previouslyChecked.has(style.id);
+      label.classList.toggle("is-checked", input.checked);
       input.addEventListener("change", () => {
         label.classList.toggle("is-checked", input.checked);
       });
@@ -116,6 +123,134 @@ loadStyles();
 function selectedStyleIds() {
   return Array.from(styleGrid.querySelectorAll("input:checked")).map((el) => el.value);
 }
+
+// ---- Style manager (human-editable canvas over styles.json) ----
+
+const manageStylesBtn = $("manageStylesBtn");
+const styleManager = $("styleManager");
+const styleEditorList = $("styleEditorList");
+const newStyleLabel = $("newStyleLabel");
+const newStylePrompt = $("newStylePrompt");
+const addStyleBtn = $("addStyleBtn");
+
+function styleEditorStatus(card, message, isError) {
+  let statusEl = card.querySelector(".style-editor-status");
+  if (!statusEl) {
+    statusEl = document.createElement("span");
+    statusEl.className = "style-editor-status";
+    card.appendChild(statusEl);
+  }
+  statusEl.textContent = message;
+  statusEl.classList.toggle("is-error", Boolean(isError));
+  if (!isError) setTimeout(() => { statusEl.textContent = ""; }, 2500);
+}
+
+async function loadStyleEditors() {
+  try {
+    const res = await fetch("/api/styles/full");
+    const data = await res.json();
+    styleEditorList.innerHTML = "";
+    data.styles.forEach((style) => {
+      const card = document.createElement("div");
+      card.className = "style-editor-card";
+      card.dataset.styleId = style.id;
+
+      const idEl = document.createElement("span");
+      idEl.className = "style-editor-id";
+      idEl.textContent = style.id;
+      card.appendChild(idEl);
+
+      const labelField = document.createElement("label");
+      labelField.className = "field";
+      labelField.innerHTML = '<span class="field-label">Name</span>';
+      const labelInput = document.createElement("input");
+      labelInput.type = "text";
+      labelInput.value = style.label;
+      labelField.appendChild(labelInput);
+      card.appendChild(labelField);
+
+      const promptField = document.createElement("label");
+      promptField.className = "field";
+      promptField.innerHTML = '<span class="field-label">Prompt</span>';
+      const promptInput = document.createElement("textarea");
+      promptInput.rows = 2;
+      promptInput.value = style.prompt;
+      promptField.appendChild(promptInput);
+      card.appendChild(promptField);
+
+      const row = document.createElement("div");
+      row.className = "row";
+
+      const saveBtn = document.createElement("button");
+      saveBtn.className = "btn btn-secondary";
+      saveBtn.type = "button";
+      saveBtn.textContent = "Save";
+      saveBtn.addEventListener("click", async () => {
+        try {
+          const res = await fetch(`/api/styles/${encodeURIComponent(style.id)}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ label: labelInput.value, prompt: promptInput.value }),
+          });
+          if (!res.ok) throw new Error((await res.json()).detail || "Save failed");
+          styleEditorStatus(card, "Saved");
+          loadStyles();
+        } catch (err) {
+          styleEditorStatus(card, err.message, true);
+        }
+      });
+      row.appendChild(saveBtn);
+
+      const deleteBtn = document.createElement("button");
+      deleteBtn.className = "btn";
+      deleteBtn.type = "button";
+      deleteBtn.textContent = "Delete";
+      deleteBtn.addEventListener("click", async () => {
+        try {
+          const res = await fetch(`/api/styles/${encodeURIComponent(style.id)}`, { method: "DELETE" });
+          if (!res.ok) throw new Error((await res.json()).detail || "Delete failed");
+          loadStyleEditors();
+          loadStyles();
+        } catch (err) {
+          styleEditorStatus(card, err.message, true);
+        }
+      });
+      row.appendChild(deleteBtn);
+
+      card.appendChild(row);
+      styleEditorList.appendChild(card);
+    });
+  } catch {
+    styleEditorList.innerHTML = '<span class="hint">Could not load styles for editing.</span>';
+  }
+}
+
+manageStylesBtn.addEventListener("click", () => {
+  const opening = styleManager.hidden;
+  styleManager.hidden = !opening;
+  manageStylesBtn.textContent = opening ? "Hide style editor" : "Manage styles";
+  if (opening) loadStyleEditors();
+});
+
+addStyleBtn.addEventListener("click", async () => {
+  const label = newStyleLabel.value.trim();
+  const prompt = newStylePrompt.value.trim();
+  if (!label || !prompt) { showToast("Give the new style a name and a prompt."); return; }
+  try {
+    const res = await fetch("/api/styles", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ label, prompt }),
+    });
+    if (!res.ok) throw new Error((await res.json()).detail || "Could not add style.");
+    newStyleLabel.value = "";
+    newStylePrompt.value = "";
+    loadStyleEditors();
+    loadStyles();
+  } catch (err) {
+    showToast(err.message);
+  }
+});
 
 // ---- Shared SSE progress watcher (single jobs and batches alike) ----
 
@@ -328,4 +463,36 @@ async function pollHealth() {
 }
 
 pollHealth();
+
+// ---- VRAM gauge ----
+// Needle sweeps -90deg (0% used, left, green) to +90deg (100% used, right,
+// red) through 0deg (50%, top, yellow) -- matches the gradient arc, which
+// always runs left(green) -> middle(yellow) -> right(red) regardless of the
+// GPU: the scale is whatever memory.total nvidia-smi reports for the card
+// actually installed, not a hardcoded VRAM size.
+const VRAM_MAXED_PCT = 97;
+
+async function pollVram() {
+  try {
+    const res = await fetch("/api/gpu/vram");
+    const data = await res.json();
+    if (!data.available) {
+      vramGauge.hidden = true;
+      return;
+    }
+    vramGauge.hidden = false;
+    const pct = Math.max(0, Math.min(100, (data.used_mib / data.total_mib) * 100));
+    const angle = (pct / 100) * 180 - 90;
+    vramNeedle.style.transform = `rotate(${angle}deg)`;
+    vramPct.textContent = `${Math.round(pct)}%`;
+    vramLabel.textContent = `${data.used_mib.toLocaleString()} / ${data.total_mib.toLocaleString()} MiB`;
+    vramGauge.title = data.name;
+    vramGauge.classList.toggle("is-maxed", pct >= VRAM_MAXED_PCT);
+  } catch {
+    vramGauge.hidden = true;
+  }
+}
+
+pollVram();
+setInterval(pollVram, 1000);
 setInterval(pollHealth, 15000);
