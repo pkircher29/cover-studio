@@ -28,27 +28,33 @@ memory — see [SPEC.md](SPEC.md) for how it works.
 - `pip install -r requirements.txt` (torch from the CPU wheel index is enough; no GPU required for
   the app itself — YuE2 generation runs through the separately-built engine).
 
-## Known limitations
+## GPU setup and running
 
-- **Vulkan backend crashes on generation**, not just on Intel Arc: `ggml-vulkan.cpp:2020
-  GGML_ASSERT(get_misalign_bytes(ctx, src1) == 0)` fires in the batched-decode kernel during YuE2's
-  AR phase. Originally seen on an Intel Arc B580, but reproduces identically on an NVIDIA GTX 1650
-  SUPER — it's a ggml-vulkan bug, not vendor-specific (upstream issue:
-  [audio.cpp#535](https://github.com/0xShug0/audio.cpp/issues/535)).
-- **CUDA works but needs real VRAM headroom** — more than the weights file size alone suggests. A
-  clean end-to-end generation succeeded once on a 4GB card, but a second run crashed
-  (`ggml.c:1671 GGML_ASSERT(ctx->mem_buffer != NULL)`) and a third failed more gracefully with an
-  explicit `cudaMalloc failed: out of memory` while requesting ~2GB on top of ~1.8GB already resident.
-  Root cause: the ASR model, YuE2's AR decode buffers, and its NAR/synthesis weights can all be
-  resident at once, and that combined peak comfortably exceeds 4GB even though the YuE2 Q4_0 weights
-  file itself is only ~2.7GB. Budget for **at least 8GB VRAM** before trusting CUDA for unattended runs;
-  on tighter cards, use the gauge (see [SPEC.md](SPEC.md)) to watch headroom, and expect it may fail on
-  longer generations.
-- Until the Vulkan bug lands upstream, set `"backend": "cpu"` in the engine's `server.json` — slower,
-  but the only backend confirmed reliable across repeated real generations.
+Use the patched [audio.cpp fork](https://github.com/pkircher29/audio.cpp) and follow
+[GPU setup and verification](docs/GPU_SETUP.md). The original unpatched Vulkan
+engine can abort during YuE2 generation.
 
-## Running
+Run `start.ps1` (or the existing desktop shortcut). The launcher selects a matching
+native executable, checks the selected device and both servers, and opens the app
+only when ready. The top bar shows the actual configured generation backend/device.
+Local preferences can be saved in the ignored `launch.local.json` file.
 
-Configure the engine (`server.json` next to `audiocpp_server.exe`) with `yue2` and `asr` (`qwen3_asr`)
-model entries, then run `start.ps1` — it starts the engine, starts this app, and opens
-http://127.0.0.1:8420.
+Verified on Intel Arc B580 (12 GB): repeated 48 kHz stereo generation, including
+approximately 60-second outputs in 27 seconds at 4 synthesis steps. This is a
+runtime check, not a musical-quality benchmark or a guarantee for arbitrary song
+lengths. The two GPU-operation regressions also pass on GTX 1650 SUPER; full
+YuE2 generation on that 4 GB card is not claimed as verified.
+
+## Credits and licenses
+
+Powered by **[YuE / YuE2](https://github.com/multimodal-art-projection/YuE)** and its
+original authors. See the [official project](https://map-yue2.github.io/) and
+[YuE2 model](https://huggingface.co/m-a-p/YuE2-3B). Native inference is provided by
+[audio.cpp](https://github.com/0xShug0/audio.cpp); melody transcription uses
+[SheetSage2](https://huggingface.co/m-a-p/SheetSage2) and MERT-v2, and lyrics
+transcription uses Qwen3-ASR. This is an independent community interface.
+
+Cover Studio code: [Apache-2.0](LICENSE). **YuE2, SheetSage2 and MERT-v2 model
+weights: CC BY-NC 4.0 (noncommercial).** The code license does not grant commercial
+permission for those models. Models and recordings are not included in this repo.
+See [NOTICE](NOTICE) and [third-party credits and license links](THIRD_PARTY_NOTICES.md).

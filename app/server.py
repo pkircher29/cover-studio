@@ -127,6 +127,12 @@ def _stage_name_for_line(line: str) -> str | None:
 
 
 def _engine_process() -> psutil.Process | None:
+    if os.environ.get("ENGINE_PID"):
+        try:
+            proc = psutil.Process(int(os.environ["ENGINE_PID"]))
+            return proc if proc.name().lower() == ENGINE_PROCESS_NAME.lower() else None
+        except (ValueError, psutil.NoSuchProcess, psutil.AccessDenied):
+            return None
     for proc in psutil.process_iter(["name"]):
         try:
             if proc.info["name"] and proc.info["name"].lower() == ENGINE_PROCESS_NAME.lower():
@@ -170,6 +176,11 @@ def _find_nvidia_smi() -> str | None:
 
 @app.get("/api/gpu/vram")
 async def gpu_vram():
+    # NVIDIA's first device is not evidence of the active Vulkan GPU's memory.
+    # Until device-specific telemetry is available, hide the gauge for Vulkan/CPU.
+    state = await health()
+    if not state.get("ok") or state.get("backend") != "cuda":
+        return {"available": False}
     smi = _find_nvidia_smi()
     if smi is None:
         return {"available": False}
@@ -182,7 +193,11 @@ async def gpu_vram():
             stderr=asyncio.subprocess.PIPE,
         )
         stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5.0)
-        line = stdout.decode("utf-8", "ignore").strip().splitlines()[0]
+        lines = stdout.decode("utf-8", "ignore").strip().splitlines()
+        matching = [line for line in lines if line.split(",")[0].strip() == state.get("device")]
+        if len(matching) != 1:
+            return {"available": False}
+        line = matching[0]
         name, used, total = [p.strip() for p in line.split(",")]
         return {
             "available": True,
@@ -226,13 +241,18 @@ async def health():
             res = await client.get(f"{AUDIOCPP_URL}/health")
             res.raise_for_status()
             data = res.json()
+            models_res = await client.get(f"{AUDIOCPP_URL}/v1/models")
+            models_res.raise_for_status()
+            models = models_res.json().get("data", [])
     except Exception as exc:  # engine not up yet, or unreachable
         log.warning("audiocpp_server health check failed: %s", exc)
         return {"ok": False}
 
-    models = data.get("models") or data.get("configured_models") or []
-    yue2_loaded = YUE2_MODEL_ID in models if isinstance(models, list) else False
-    return {"ok": True, "yue2_loaded": yue2_loaded}
+    yue2 = next((m for m in models if m.get("id") == YUE2_MODEL_ID), None)
+    backend = data.get("backend", "unknown")
+    device = os.environ.get("ENGINE_DEVICE_NAME") if backend == os.environ.get("ENGINE_BACKEND") else None
+    return {"ok": yue2 is not None, "yue2_loaded": bool(yue2 and yue2.get("loaded")),
+            "backend": backend, "device": device}
 
 
 async def _run_transcribe_job(job: Job, audio_path: str, tmp_dir: str) -> None:
