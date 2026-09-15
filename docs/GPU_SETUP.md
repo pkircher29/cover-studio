@@ -2,10 +2,12 @@
 
 ## Compatible engine
 
-Use [pkircher29/audio.cpp](https://github.com/pkircher29/audio.cpp), branch `dev`.
+Use [pkircher29/audio.cpp](https://github.com/pkircher29/audio.cpp), branch `cover-studio` (the fork's default).
 The Vulkan fixes are commit `480280a` (based on upstream `87544b5`), also reviewed
 in [engine PR 1](https://github.com/pkircher29/audio.cpp/pull/1).
 Upstream attribution and licenses are retained in the fork.
+This branch pins the installed engine baseline plus the verified fixes; upstream
+`dev` has a different history and is not the build covered by these results.
 
 Build `audiocpp_server` with the `windows-vulkan-release` preset using the
 engine's documented Windows toolchain (MSVC, CMake/Ninja, Vulkan SDK). Build the
