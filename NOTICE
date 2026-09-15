@@ -7,6 +7,7 @@ https://github.com/multimodal-art-projection/YuE
 https://map-yue2.github.io/
 
 Native inference is provided by audio.cpp and its contributors:
+Copyright 2026 ShugoAI LLC (audio.cpp).
 https://github.com/0xShug0/audio.cpp
 The compatible fork containing this project's Vulkan fixes is:
 https://github.com/pkircher29/audio.cpp
