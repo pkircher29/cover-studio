@@ -377,7 +377,9 @@ transcribeBtn.addEventListener("click", async () => {
     unlock(lyricsPanel);
     unlock(stylesPanel);
     runBtn.disabled = false;
+    lyricsStageLabel.textContent = "Lyrics ready — review them below";
   } catch (err) {
+    lyricsStageLabel.textContent = "Lyrics transcription failed";
     showToast(err.message || "Lyrics transcription failed.");
   } finally {
     setBusy(transcribeBtn, "Transcribing…", false, "Transcribe lyrics");
@@ -451,7 +453,8 @@ async function pollHealth() {
     const data = await res.json();
     if (data.ok) {
       statusDot.className = "status-dot ok";
-      statusText.textContent = data.yue2_loaded ? "engine ready" : "engine ready · model loads on first use";
+      const engine = [data.backend?.toUpperCase(), data.device].filter(Boolean).join(" · ");
+      statusText.textContent = `${engine} · ${data.yue2_loaded ? "model ready" : "model loads on first use"}`;
     } else {
       statusDot.className = "status-dot bad";
       statusText.textContent = "engine unreachable";

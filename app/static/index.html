@@ -4,10 +4,11 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Cover Studio</title>
+<link rel="icon" href="data:,">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="styles.css?v=3">
 </head>
 <body>
 
@@ -156,7 +157,7 @@
 
       <div class="row">
         <button class="btn btn-primary btn-large" id="runBtn" disabled>Make covers</button>
-        <span class="hint" id="runHint">Transcribes the melody, then generates every style you picked, one at a time, using the lyrics above. Runs on CPU &mdash; each style takes a few minutes.</span>
+        <span class="hint" id="runHint">Transcribes the melody, then generates every style you picked, one at a time, using the lyrics above. The active generation device is shown at the top.</span>
       </div>
 
       <div class="progress" id="progress" hidden>
@@ -184,8 +185,16 @@
 
 </main>
 
+<footer class="credits">
+  Powered by <a href="https://github.com/multimodal-art-projection/YuE" target="_blank" rel="noopener noreferrer">YuE2 by the YuE project</a>
+  &middot; <a href="https://github.com/0xShug0/audio.cpp" target="_blank" rel="noopener noreferrer">audio.cpp</a>
+  &middot; <a href="https://huggingface.co/m-a-p/SheetSage2" target="_blank" rel="noopener noreferrer">SheetSage2</a>
+  <br>YuE2 and SheetSage2 model weights: <a href="https://creativecommons.org/licenses/by-nc/4.0/" target="_blank" rel="noopener noreferrer">CC BY-NC 4.0 &mdash; noncommercial</a>.
+  <a href="https://github.com/pkircher29/cover-studio/blob/master/THIRD_PARTY_NOTICES.md" target="_blank" rel="noopener noreferrer">Credits &amp; licenses</a>
+</footer>
+
 <div class="toast" id="toast" hidden></div>
 
-<script src="app.js?v=2"></script>
+<script src="app.js?v=3"></script>
 </body>
 </html>

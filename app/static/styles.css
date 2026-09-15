@@ -78,6 +78,11 @@ body {
 
 /* ---- VRAM gauge ---- */
 
+[hidden] { display: none !important; }
+
+.credits { max-width: 1160px; margin: 24px auto 0; text-align: center; color: var(--ink-dim); font-size: 12px; }
+.credits a { color: var(--teal); }
+
 .vram-gauge {
   display: flex;
   align-items: center;
