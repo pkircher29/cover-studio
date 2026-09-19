@@ -115,8 +115,11 @@ the displayed lyrics; previous text is retained in `lyrics-history.jsonl`.
 `lyrics-whisper-large-v3.json` stores the reusable transcript and word intervals.
 Click a timed word to seek the original recording; hover to see overlapping
 SheetSage2 vocal pitches and intervals. Both use seconds from the original start.
-Word timings are estimates, not syllable boundaries. Changed words invalidate
-the displayed timing links. YuE2 still consumes lyrics and ABC; these timestamps
+Word timings are estimates, not syllable boundaries. Use **Edit** beside a timed
+word to correct it without moving its start/end or melody-note links. Replacing
+words in the main lyrics box also preserves timing when the word count remains
+the same, whether saved directly or through **Make covers**. Inserting or deleting
+words makes the previous timing stale. YuE2 still consumes lyrics and ABC; these timestamps
 do not enforce exact timing in generated covers.
 
 Whisper transcriptions now receive a second, acoustic timing pass using
