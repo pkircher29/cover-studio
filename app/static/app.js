@@ -31,6 +31,9 @@ const lyricsStageLabel = $("lyricsStageLabel");
 
 let selectedFile = null;
 let sessionId = null;
+let preparingSong = false;
+let generatingCover = false;
+let sessionReady = false;
 let toastTimer = null;
 const styleRowById = {};
 
@@ -60,12 +63,179 @@ function formatElapsed(seconds) {
 
 function handleFile(file) {
   if (!file) return;
+  if (preparingSong || generatingCover) { showToast("Wait for the current run to finish."); return; }
+  sessionId = null;
+  sessionReady = false;
+  runBtn.disabled = true;
+  $("vocalPreview").hidden = true;
+  $("vocalAudio").removeAttribute("src");
   selectedFile = file;
+  lyricsText.value = "";
+  if (sourceAudio.src.startsWith("blob:")) URL.revokeObjectURL(sourceAudio.src);
   sourceAudio.src = URL.createObjectURL(file);
   sourceFilename.textContent = file.name;
   sourcePlayer.hidden = false;
   transcribeBtn.disabled = false;
+  transcribeBtn.textContent = "Prepare song";
+  $("saveLyricsBtn").disabled = true;
+  $("sessionHint").textContent = "This upload will create a new saved song.";
+  $("whisperBtn").disabled = true;
+  renderTiming(null);
+  $("savedCovers").replaceChildren();
 }
+
+async function refreshSessions() {
+  const res = await fetch("/api/sessions");
+  if (!res.ok) throw new Error("Could not load saved songs");
+  const songs = await res.json();
+  const select = $("savedSongSelect");
+  select.replaceChildren(new Option("Choose a saved song", ""));
+  for (const song of songs) {
+    select.add(new Option(`${song.source_name} — ${song.ready ? "ready" : "resume preparation"} · ${new Date(song.created_at * 1000).toLocaleString()}`, song.session_id));
+  }
+  if (sessionId) select.value = sessionId;
+}
+
+function showPreparedSong(data) {
+  sessionReady = data.ready;
+  sessionId = data.session_id;
+  lyricsText.value = data.lyrics || "";
+  $("saveLyricsBtn").disabled = !data.ready;
+  $("whisperBtn").disabled = !data.ready || !!data.active_job_id || !!data.active_batch_id;
+  renderTiming(data.lyric_timing);
+  $("vocalPreview").hidden = !data.ready;
+  if (data.ready) {
+    $("vocalAudio").src = data.vocals_url;
+    $("melodySummary").textContent = `${data.melody.vocal_notes} vocal notes from isolated vocals · ${data.melody.instrumental_notes} instrumental notes from the full song`;
+    unlock(lyricsPanel);
+    unlock(stylesPanel);
+  }
+  runBtn.disabled = !data.ready || !!data.active_batch_id;
+  $("sessionHint").textContent = data.ready
+    ? "Saved analysis loaded. Choose styles and make more covers without retranscribing."
+    : (data.error || "Preparation is in progress. Resume to follow it.");
+  $("savedCovers").replaceChildren();
+  for (const run of data.generations || []) {
+    for (const style of run.styles || []) {
+      if (!style.filename) continue;
+      const row = document.createElement("p");
+      const link = document.createElement("a");
+      link.href = `/completed/${encodeURIComponent(style.filename)}`;
+      link.textContent = `${style.label} — ${new Date(run.created_at * 1000).toLocaleString()}`;
+      link.target = "_blank";
+      row.appendChild(link);
+      $("savedCovers").appendChild(row);
+    }
+  }
+}
+
+function renderTiming(timing) {
+  $("tightenTimingBtn").disabled = !timing?.current;
+  $("wordTimings").replaceChildren();
+  $("timingSummary").textContent = timing ? timing.message : "No word timings saved yet. Use Whisper large-v3 to add them.";
+  for (const word of timing?.words || []) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "btn";
+    button.textContent = `${word.text} · ${word.start.toFixed(2)}–${word.end.toFixed(2)}s${word.alignment_status === 'review' ? ' · review' : ''}`;
+    button.title = `Word confidence: ${Math.round(word.probability * 100)}%\n` + (word.note_indices.length
+      ? word.note_indices.map(i => { const n = timing.notes[i]; return `MIDI ${n.pitch}: ${n.start.toFixed(2)}–${n.end.toFixed(2)}s`; }).join("\n")
+      : "No overlapping vocal note detected");
+    if (word.original_start !== undefined) {
+      button.title += `\nOriginal: ${word.original_start.toFixed(2)}–${word.original_end.toFixed(2)}s\nAlignment score: ${word.alignment_score ?? 'unavailable'} · ${word.alignment_status}`;
+    }
+    button.addEventListener("click", () => {
+      sourceAudio.currentTime = word.start;
+      sourceAudio.play().catch(e => showToast(e.message));
+    });
+    $("wordTimings").appendChild(button);
+  }
+}
+
+lyricsText.addEventListener("input", () => {
+  $("tightenTimingBtn").disabled = true;
+  $("wordTimings").replaceChildren();
+  $("timingSummary").textContent = "Lyrics edited. Save to check whether the stored word timings still match.";
+});
+
+for (const action of ["whisperBtn", "tightenTimingBtn"]) $(action).addEventListener("click", async () => {
+  if (!sessionId || preparingSong || generatingCover) return;
+  preparingSong = true;
+  $("whisperBtn").disabled = true;
+  $("tightenTimingBtn").disabled = true;
+  $("saveLyricsBtn").disabled = true;
+  lyricsText.disabled = true;
+  runBtn.disabled = true;
+  try {
+    $("timingSummary").textContent = action === 'tightenTimingBtn' ? 'Aligning word boundaries…' : "Transcribing with Whisper large-v3 and aligning words…";
+    const route = action === 'tightenTimingBtn' ? 'tighten-timing' : 'transcribe-whisper';
+    const res = await fetch(`/api/sessions/${sessionId}/${route}`, {method: "POST"});
+    if (!res.ok) throw new Error(await res.text());
+    const {job_id} = await res.json();
+    await watchEvents(`/api/jobs/${job_id}/events`, data => {
+      $("timingSummary").textContent = `${data.stage} · ${formatElapsed(data.elapsed_s)}`;
+    }, () => {});
+    const result = await fetch(`/api/jobs/${job_id}/result`);
+    if (!result.ok) throw new Error(await result.text());
+    showPreparedSong(await result.json());
+  } catch (e) { showToast(e.message); $("timingSummary").textContent = "Timing update failed. Your previous lyrics and timings are retained.";
+    $("tightenTimingBtn").disabled = !sessionReady;
+  }
+  finally {
+    preparingSong = false;
+    lyricsText.disabled = false;
+    $("whisperBtn").disabled = !sessionReady;
+    $("saveLyricsBtn").disabled = !sessionReady;
+    runBtn.disabled = !sessionReady;
+  }
+});
+
+$("refreshSessionsBtn").addEventListener("click", () => refreshSessions().catch(e => showToast(e.message)));
+$("openSessionBtn").addEventListener("click", async () => {
+  if (preparingSong || generatingCover) { showToast("Wait for the current run to finish."); return; }
+  const id = $("savedSongSelect").value;
+  if (!id) return;
+  preparingSong = true;
+  try {
+    const res = await fetch(`/api/sessions/${id}`);
+    if (!res.ok) throw new Error("Could not open this song");
+    const data = await res.json();
+    selectedFile = null;
+    sourceAudio.src = data.source_url;
+    sourceFilename.textContent = data.source_name;
+    sourcePlayer.hidden = false;
+    showPreparedSong(data);
+    transcribeBtn.disabled = data.ready;
+    transcribeBtn.textContent = data.ready ? "Song prepared" : "Resume preparation";
+    const settings = data.generations?.at(-1)?.settings;
+    if (settings) {
+      $("cotSelect").value = settings.cot;
+      $("seedInput").value = settings.seed;
+      $("stepsInput").value = settings.num_inference_steps;
+      $("flipKeyInput").checked = settings.flip_key;
+      $("vocalSelect").value = settings.vocal;
+      for (const input of styleGrid.querySelectorAll("input")) {
+        input.checked = settings.styles.includes(input.value);
+        input.closest("label").classList.toggle("is-checked", input.checked);
+      }
+    }
+  } catch (err) { showToast(err.message); }
+  finally { preparingSong = false; }
+});
+
+$("saveLyricsBtn").addEventListener("click", async () => {
+  if (!sessionId) return;
+  try {
+    const res = await fetch(`/api/sessions/${sessionId}/lyrics`, {
+      method: "PUT", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({lyrics: lyricsText.value}),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    renderTiming((await res.json()).lyric_timing);
+    showToast("Lyrics saved.");
+  } catch (err) { showToast(err.message); }
+});
+refreshSessions().catch(e => showToast(e.message));
 
 dropzone.addEventListener("click", () => fileInput.click());
 dropzone.addEventListener("keydown", (e) => {
@@ -336,31 +506,38 @@ function renderStyleResult(style) {
 // ---- Transcribe lyrics (review/edit before generating) ----
 
 transcribeBtn.addEventListener("click", async () => {
-  if (!selectedFile) return;
+  if ((!selectedFile && !sessionId) || generatingCover) return;
 
-  setBusy(transcribeBtn, "Transcribing…", true, "Transcribe lyrics");
+  preparingSong = true;
+  runBtn.disabled = true;
+  $("vocalPreview").hidden = true;
+  setBusy(transcribeBtn, "Preparing…", true, "Prepare song");
   lyricsProgress.hidden = false;
   lyricsPulse.classList.remove("is-active");
   lyricsElapsed.textContent = "0:00";
-  lyricsStageLabel.textContent = "Transcribing lyrics…";
+  lyricsStageLabel.textContent = "Separating vocals (htdemucs_ft)…";
 
   const form = new FormData();
-  form.append("file", selectedFile);
+  if (selectedFile) form.append("file", selectedFile);
 
   try {
-    const startRes = await fetch("/api/covers/prepare", { method: "POST", body: form });
+    const startRes = selectedFile
+      ? await fetch("/api/covers/prepare", { method: "POST", body: form })
+      : await fetch(`/api/sessions/${sessionId}/prepare`, { method: "POST" });
     if (!startRes.ok) {
       const detail = await startRes.text();
       throw new Error(detail || `Could not start (${startRes.status})`);
     }
     const { session_id, job_id } = await startRes.json();
     sessionId = session_id;
+    selectedFile = null;
 
     await watchEvents(
       `/api/jobs/${job_id}/events`,
       (data) => {
         lyricsElapsed.textContent = formatElapsed(data.elapsed_s);
-        lyricsPulse.classList.toggle("is-active", !!data.engine_active);
+        lyricsStageLabel.textContent = data.stage;
+        lyricsPulse.classList.toggle("is-active", data.status === "running");
       },
       (isReconnecting) => {
         if (isReconnecting) lyricsStageLabel.textContent = "Reconnecting… still transcribing";
@@ -373,27 +550,30 @@ transcribeBtn.addEventListener("click", async () => {
       throw new Error(detail || `Transcription failed (${res.status})`);
     }
     const data = await res.json();
-    lyricsText.value = data.lyrics || "";
-    unlock(lyricsPanel);
-    unlock(stylesPanel);
-    runBtn.disabled = false;
-    lyricsStageLabel.textContent = "Lyrics ready — review them below";
+    showPreparedSong(data);
+    lyricsStageLabel.textContent = "Lyrics and both melody parts ready — review below";
   } catch (err) {
-    lyricsStageLabel.textContent = "Lyrics transcription failed";
-    showToast(err.message || "Lyrics transcription failed.");
+    lyricsStageLabel.textContent = "Song preparation failed";
+    showToast(err.message || "Song preparation failed.");
   } finally {
-    setBusy(transcribeBtn, "Transcribing…", false, "Transcribe lyrics");
+    preparingSong = false;
+    setBusy(transcribeBtn, "Preparing…", false, "Prepare song");
+    transcribeBtn.disabled = sessionReady;
+    transcribeBtn.textContent = sessionReady ? "Song prepared" : (sessionId ? "Resume preparation" : "Prepare song");
     lyricsPulse.classList.remove("is-active");
+    refreshSessions().catch(e => showToast(e.message));
   }
 });
 
 // ---- Generate (uses the session from the transcribe step + edited lyrics) ----
 
 runBtn.addEventListener("click", async () => {
-  if (!sessionId) { showToast("Transcribe lyrics first."); return; }
+  if (!sessionId) { showToast("Prepare the song first."); return; }
+  if (preparingSong || generatingCover) return;
   const styleIds = selectedStyleIds();
   if (styleIds.length === 0) { showToast("Pick at least one style."); return; }
 
+  generatingCover = true;
   setBusy(runBtn, "Running…", true, "Make covers");
   progressBox.hidden = false;
   progressPulse.classList.remove("is-active");
@@ -419,7 +599,7 @@ runBtn.addEventListener("click", async () => {
       throw new Error(detail || `Could not start (${startRes.status})`);
     }
     const { batch_id } = await startRes.json();
-    sessionId = null; // the session is consumed server-side once generation starts
+    $("vocalAudio").pause();
 
     await watchEvents(
       `/api/covers/${batch_id}/events`,
@@ -440,8 +620,10 @@ runBtn.addEventListener("click", async () => {
   } catch (err) {
     showToast(err.message || "Cover run failed.");
   } finally {
+    generatingCover = false;
     setBusy(runBtn, "Running…", false, "Make covers");
     progressPulse.classList.remove("is-active");
+    refreshSessions().catch(e => showToast(e.message));
   }
 });
 

@@ -25,13 +25,17 @@ from pathlib import Path
 import httpx
 import psutil
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import Response
+from fastapi.responses import Response, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 from starlette.concurrency import run_in_threadpool
 
 import sheetsage2_transcribe
+import vocal_separation
+import whisper_transcribe
+import session_store
+from session_store import Session
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("cover_studio")
@@ -563,23 +567,25 @@ async def _run_batch(
     num_inference_steps: int,
     flip_key: bool = False,
     vocal: str = "any",
+    prepared_abc: str | None = None,
+    session: Session | None = None,
 ) -> None:
     try:
         if not lyrics.strip():
             lyrics = "[Verse]\n(instrumental - no lyrics detected)"
 
-        batch.stage = "Transcribing melody"
+        batch.stage = "Preparing cover"
         batch.phase = "app"
         abc = ""
         try:
-            melody = await run_in_threadpool(sheetsage2_transcribe.transcribe, source_path, tmp_dir)
-            abc = melody.get("abc", "")
+            if prepared_abc is None:
+                raise RuntimeError("Prepare vocal and instrumental melodies before generating")
+            abc = prepared_abc
             log.info("transcribed melody key line: %r", next((l for l in abc.splitlines() if l.startswith("K:")), None))
             if flip_key and abc:
                 abc = flip_abc_key(abc)
         except Exception as exc:
-            log.warning("melody transcription failed, continuing with cot=off: %s", exc)
-            cot = "off"
+            raise RuntimeError(f"Cannot use the prepared melody: {exc}") from exc
 
         base_name = _safe_filename_part(Path(source_name).stem) or "cover"
         vocal_hint = {"male": "male lead vocal", "female": "female lead vocal"}.get(vocal, "")
@@ -600,6 +606,8 @@ async def _run_batch(
                 log.exception("generation failed for style %s", style_run.id)
                 style_run.status = "error"
                 style_run.error = str(exc)
+            if session is not None:
+                _save_session_batch(session, batch)
 
         batch.status = "error" if all(s.status == "error" for s in batch.styles) else "done"
         batch.stage = "Done"
@@ -607,7 +615,11 @@ async def _run_batch(
         batch.status = "error"
         batch.error = str(exc)
     finally:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
+        if session is not None:
+            session.active_batch_id = None
+            _save_session_batch(session, batch)
+        else:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 @app.get("/api/styles")
@@ -666,49 +678,208 @@ async def delete_style(style_id: str):
     return {"styles": STYLE_PRESETS}
 
 
-@dataclass
-class Session:
-    id: str
-    source_path: str
-    tmp_dir: str
-    source_name: str
+SESSIONS: dict[str, Session] = session_store.load_all()
 
 
-SESSIONS: dict[str, Session] = {}
+def _save_session_batch(session: Session, batch: Batch) -> None:
+    record = next(item for item in session.generations if item["batch_id"] == batch.id)
+    record.update(status=batch.status, error=batch.error, styles=[
+        {"id": s.id, "label": s.label, "status": s.status,
+         "filename": s.filename, "error": s.error} for s in batch.styles
+    ])
+    session_store.save(session)
 
 
-async def _run_lyrics_job(job: Job, audio_path: str) -> None:
-    job.stage = "Transcribing lyrics"
+def _session_result(session: Session) -> dict:
+    return {"session_id": session.id, "source_name": session.source_name,
+            "ready": session.ready, "error": session.error,
+            "lyrics": session.lyrics or "", "melody": session.melody,
+            "lyric_timing": whisper_transcribe.timing_view(session.transcription, session.lyrics, session.tmp_dir),
+            "vocals_url": f"/api/covers/{session.id}/vocals" if session.vocals_path else None,
+            "source_url": f"/api/sessions/{session.id}/source",
+            "separation_model": "htdemucs_ft", "generations": session.generations,
+            "active_job_id": session.active_job_id, "active_batch_id": session.active_batch_id}
+
+
+async def _run_lyrics_job(job: Job, session: Session) -> None:
+    job.stage = "Separating vocals (htdemucs_ft)"
+    session.ready = False
     try:
-        lyrics = await _call_yue2_transcribe_lyrics(audio_path)
-        job.result = {"lyrics": lyrics}
+        session.error = None
+        if not session.vocals_path or not Path(session.vocals_path).is_file():
+            session.vocals_path = await vocal_separation.separate(session.source_path, session.tmp_dir)
+            session_store.save(session)
+        job.stage = "Transcribing vocals with Whisper large-v3 and word timing"
+        if session.lyrics is None:
+            session.transcription = await whisper_transcribe.transcribe(session.vocals_path, session.tmp_dir)
+            session.lyrics = session.transcription["text"]
+            session_store.save(session)
+        if session.melody is None:
+            session.melody = await run_in_threadpool(
+                sheetsage2_transcribe.transcribe_cover, session.vocals_path,
+                session.source_path, str(Path(session.tmp_dir) / "scores"),
+                lambda stage: setattr(job, "stage", stage),
+            )
+        session.ready = True
+        job.result = _session_result(session)
         job.status = "done"
         job.stage = "Done"
     except Exception as exc:  # noqa: BLE001 - surfaced to the client as-is
         job.status = "error"
-        job.error = f"Lyrics transcription failed: {exc}"
+        job.error = f"Song preparation failed during {job.stage}: {exc}"
+        log.exception("song preparation failed")
+        session.error = job.error
+    finally:
+        session.active_job_id = None
+        session_store.save(session)
 
 
 @app.post("/api/covers/prepare")
 async def prepare_covers(file: UploadFile = File(...)):
-    """Upload the source recording and kick off lyrics transcription only.
-    The frontend shows the result for review/editing before the (much
-    longer) melody transcription + generation phase starts."""
-    tmp_dir = tempfile.mkdtemp(prefix="cover-studio-batch-")
+    """Separate vocals, transcribe lyrics, and prepare both melody parts."""
+    session_id = uuid.uuid4().hex
+    song_name = _safe_filename_part(Path(file.filename or "song").stem) or "song"
+    tmp_dir = str(session_store.ROOT / f"{song_name}-{session_id[:12]}")
+    Path(tmp_dir).mkdir(parents=True, exist_ok=False)
     suffix = Path(file.filename or "source.wav").suffix or ".wav"
     source_path = Path(tmp_dir) / f"source{suffix}"
     source_path.write_bytes(await file.read())
 
     session = Session(
-        id=uuid.uuid4().hex, source_path=str(source_path), tmp_dir=tmp_dir,
+        id=session_id, source_path=str(source_path), tmp_dir=tmp_dir,
         source_name=file.filename or "source",
     )
     SESSIONS[session.id] = session
 
     job = Job(id=uuid.uuid4().hex, kind="transcribe_lyrics")
+    session.active_job_id = job.id
+    session_store.save(session)
     JOBS[job.id] = job
-    asyncio.create_task(_run_lyrics_job(job, session.source_path))
+    asyncio.create_task(_run_lyrics_job(job, session))
     return {"session_id": session.id, "job_id": job.id}
+
+
+@app.get("/api/sessions")
+async def list_sessions():
+    return [{"session_id": s.id, "source_name": s.source_name, "ready": s.ready,
+             "error": s.error, "created_at": s.created_at}
+            for s in sorted(SESSIONS.values(), key=lambda s: s.created_at, reverse=True)]
+
+
+@app.get("/api/sessions/{session_id}")
+async def get_session(session_id: str):
+    session = SESSIONS.get(session_id)
+    if session is None:
+        raise HTTPException(404, "Unknown saved song")
+    return _session_result(session)
+
+
+@app.get("/api/sessions/{session_id}/source")
+async def session_source(session_id: str):
+    session = SESSIONS.get(session_id)
+    if session is None:
+        raise HTTPException(404, "Unknown saved song")
+    return FileResponse(session.source_path)
+
+
+class LyricsUpdate(BaseModel):
+    lyrics: str
+
+
+@app.post("/api/sessions/{session_id}/transcribe-whisper")
+async def transcribe_saved_song(session_id: str):
+    session = SESSIONS.get(session_id)
+    if session is None:
+        raise HTTPException(404, "Unknown saved song")
+    if not session.ready or session.active_job_id or session.active_batch_id:
+        raise HTTPException(409, "Wait for the current preparation or generation to finish")
+    job = Job(id=uuid.uuid4().hex, kind="transcribe_lyrics")
+    session.active_job_id = job.id
+    JOBS[job.id] = job
+    session_store.save(session)
+    asyncio.create_task(_run_whisper_job(job, session))
+    return {"session_id": session.id, "job_id": job.id}
+
+
+async def _run_whisper_job(job: Job, session: Session, timing_only: bool = False):
+    job.stage = "Transcribing vocals with Whisper large-v3 and word timing"
+    try:
+        if timing_only:
+            job.stage = "Tightening word boundaries against isolated vocals"
+            result = await whisper_transcribe.refine(session.vocals_path, session.tmp_dir, session.transcription)
+        else:
+            result = await whisper_transcribe.transcribe(session.vocals_path, session.tmp_dir)
+        # Keep reviewed text in a recoverable history before explicitly replacing it.
+        history = Path(session.tmp_dir) / "lyrics-history.jsonl"
+        with history.open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps({"saved_at": time.time(), "lyrics": session.lyrics}) + "\n")
+        session.transcription = result
+        if not timing_only:
+            session.lyrics = result["text"]
+        job.status = "done"
+        job.stage = "Done"
+        job.result = _session_result(session)
+    except Exception as exc:
+        job.status = "error"
+        job.error = str(exc)
+        log.exception("Whisper transcription failed")
+    finally:
+        session.active_job_id = None
+        session_store.save(session)
+
+
+@app.post("/api/sessions/{session_id}/tighten-timing")
+async def tighten_word_timing(session_id: str):
+    session = SESSIONS.get(session_id)
+    if session is None:
+        raise HTTPException(404, "Unknown saved song")
+    if not session.ready or session.active_job_id or session.active_batch_id:
+        raise HTTPException(409, "Wait for the current run to finish")
+    if not session.transcription or whisper_transcribe.normalized(session.lyrics or '') != whisper_transcribe.normalized(session.transcription['text']):
+        raise HTTPException(409, "Timings must match the saved lyrics before tightening")
+    job = Job(id=uuid.uuid4().hex, kind="transcribe_lyrics")
+    session.active_job_id = job.id
+    JOBS[job.id] = job
+    session_store.save(session)
+    asyncio.create_task(_run_whisper_job(job, session, timing_only=True))
+    return {"session_id": session.id, "job_id": job.id}
+
+
+@app.put("/api/sessions/{session_id}/lyrics")
+async def save_session_lyrics(session_id: str, request: LyricsUpdate):
+    session = SESSIONS.get(session_id)
+    if session is None:
+        raise HTTPException(404, "Unknown saved song")
+    if not session.ready or session.active_job_id or session.active_batch_id:
+        raise HTTPException(409, "Wait for preparation to finish")
+    session.lyrics = request.lyrics
+    session_store.save(session)
+    return {"saved": True, "lyric_timing": whisper_transcribe.timing_view(session.transcription, session.lyrics, session.tmp_dir)}
+
+
+@app.post("/api/sessions/{session_id}/prepare")
+async def resume_session(session_id: str):
+    session = SESSIONS.get(session_id)
+    if session is None:
+        raise HTTPException(404, "Unknown saved song")
+    if session.active_job_id:
+        return {"session_id": session.id, "job_id": session.active_job_id}
+    if session.active_batch_id:
+        raise HTTPException(409, "A cover is still generating for this song")
+    job = Job(id=uuid.uuid4().hex, kind="transcribe_lyrics")
+    session.active_job_id = job.id
+    session_store.save(session)
+    JOBS[job.id] = job
+    asyncio.create_task(_run_lyrics_job(job, session))
+    return {"session_id": session.id, "job_id": job.id}
+
+
+@app.get("/api/covers/{session_id}/vocals")
+async def session_vocals(session_id: str):
+    session = SESSIONS.get(session_id)
+    if session is None or not session.ready or not session.vocals_path:
+        raise HTTPException(status_code=404, detail="No prepared vocal stem for this session")
+    return FileResponse(session.vocals_path, media_type="audio/wav")
 
 
 @app.post("/api/covers/{session_id}/generate")
@@ -725,24 +896,44 @@ async def generate_covers(
     session = SESSIONS.get(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="unknown or already-used session")
+    if not session.ready or session.melody is None or session.active_job_id:
+        raise HTTPException(status_code=409, detail="Wait for vocal and instrumental transcription to finish")
+    if session.active_batch_id:
+        raise HTTPException(409, "A cover is already generating for this song")
+    if cot not in ("melody", "full", "off"):
+        raise HTTPException(status_code=400, detail="Unknown melody adherence mode")
 
-    style_ids = json.loads(styles)
+    try:
+        style_ids = json.loads(styles)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(400, "Styles must be a JSON list") from exc
+    if not isinstance(style_ids, list) or any(not isinstance(s, str) for s in style_ids):
+        raise HTTPException(400, "Styles must be a list of style IDs")
+    style_ids = list(dict.fromkeys(style_ids))
     unknown = [s for s in style_ids if s not in STYLE_PRESETS_BY_ID]
     if unknown:
         raise HTTPException(status_code=400, detail=f"Unknown style id(s): {unknown}")
     if not style_ids:
         raise HTTPException(status_code=400, detail="Select at least one style.")
 
-    del SESSIONS[session_id]
     batch = Batch(
         id=uuid.uuid4().hex,
         styles=[StyleRun(id=sid, label=STYLE_PRESETS_BY_ID[sid]["label"]) for sid in style_ids],
     )
     BATCHES[batch.id] = batch
+    session.lyrics = lyrics
+    session.active_batch_id = batch.id
+    session.generations.append({"batch_id": batch.id, "created_at": time.time(),
+        "status": "running", "lyrics": lyrics, "styles": [],
+        "settings": {"styles": style_ids, "cot": cot, "seed": seed,
+                     "num_inference_steps": num_inference_steps, "flip_key": flip_key, "vocal": vocal}})
+    session_store.save(session)
     asyncio.create_task(
         _run_batch(
             batch, session.source_path, session.tmp_dir, session.source_name,
             lyrics, cot, seed, num_inference_steps, flip_key, vocal,
+            prepared_abc=session.melody["full_abc" if cot == "full" else "abc"] if cot != "off" else "",
+            session=session,
         )
     )
     return {"batch_id": batch.id}

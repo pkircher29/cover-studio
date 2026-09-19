@@ -1,4 +1,7 @@
 .venv/
+.venv-demucs/
+.venv-whisper/
+session-files/
 .verification/
 .runtime/
 launch.local.json
@@ -14,4 +17,5 @@ __pycache__/
 *.log
 *.log.err
 completed/*.wav
+completed/*.json
 !completed/.gitkeep

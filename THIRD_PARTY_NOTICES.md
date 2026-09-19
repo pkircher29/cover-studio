@@ -15,6 +15,7 @@ Those components retain their own licenses when installed separately.
 | SheetSage2 weights | [M-A-P SheetSage2](https://huggingface.co/m-a-p/SheetSage2) | CC BY-NC 4.0, per the model card |
 | MERT-v2-FullSong weights | [M-A-P MERT-v2-FullSong](https://huggingface.co/m-a-p/MERT-v2-FullSong) | CC BY-NC 4.0, per the model card |
 | Qwen3-ASR-0.6B | [Qwen team](https://huggingface.co/Qwen/Qwen3-ASR-0.6B), [Qwen3-ASR code](https://github.com/QwenLM/Qwen3-ASR) | Apache-2.0, per the source/model distribution |
+| Demucs / htdemucs_ft vocal separation | [Meta Demucs and contributors](https://github.com/facebookresearch/demucs) | MIT, per the upstream distribution |
 | audio.cpp | [0xShug0/audio.cpp and contributors](https://github.com/0xShug0/audio.cpp) | [Apache-2.0](https://github.com/0xShug0/audio.cpp/blob/dev/LICENSE); vendored components retain their own notices |
 
 **Model use is noncommercial under the listed YuE2, SheetSage2 and MERT-v2
@@ -48,3 +49,14 @@ shader's existing loop. See `docs/GPU_SETUP.md` for the tested revision.
 License/source links were checked on 2026-09-15. Check the notices shipped with
 the exact model/dependency revisions you download. This is an independent
 community interface; upstream names identify the work and do not imply endorsement.
+# Whisper lyric transcription
+
+Acoustic word-boundary refinement uses torchaudio's
+`WAV2VEC2_ASR_BASE_960H` pretrained alignment model:
+https://docs.pytorch.org/audio/2.5.0/generated/torchaudio.pipelines.WAV2VEC2_ASR_BASE_960H.html.
+CTC forced alignment uses torchaudio APIs; WhisperX itself is not installed.
+
+Whisper large-v3: OpenAI, MIT license, https://huggingface.co/openai/whisper-large-v3.
+CPU inference and word timestamps: faster-whisper, MIT license,
+https://github.com/SYSTRAN/faster-whisper. CTranslate2 converted model:
+https://huggingface.co/Systran/faster-whisper-large-v3.
