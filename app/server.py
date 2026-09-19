@@ -925,6 +925,7 @@ async def generate_covers(
         styles=[StyleRun(id=sid, label=STYLE_PRESETS_BY_ID[sid]["label"]) for sid in style_ids],
     )
     BATCHES[batch.id] = batch
+    session.transcription = whisper_transcribe.correct_words(session.transcription, session.lyrics, lyrics)
     session.lyrics = lyrics
     session.active_batch_id = batch.id
     session.generations.append({"batch_id": batch.id, "created_at": time.time(),
