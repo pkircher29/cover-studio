@@ -237,15 +237,24 @@ $("saveLyricsBtn").addEventListener("click", async () => {
 });
 refreshSessions().catch(e => showToast(e.message));
 
-dropzone.addEventListener("click", () => fileInput.click());
+dropzone.addEventListener("click", (e) => {
+  if (e.target !== fileInput) fileInput.click();
+});
 dropzone.addEventListener("keydown", (e) => {
   if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fileInput.click(); }
 });
-fileInput.addEventListener("change", () => handleFile(fileInput.files[0]));
+fileInput.addEventListener("change", () => {
+  const file = fileInput.files[0];
+  // A previously selected file must still trigger change after opening a saved song.
+  fileInput.value = "";
+  handleFile(file);
+});
 
 ["dragenter", "dragover"].forEach((evt) =>
   dropzone.addEventListener(evt, (e) => {
     e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = "copy";
     dropzone.classList.add("is-dragover");
   })
 );
@@ -256,6 +265,7 @@ fileInput.addEventListener("change", () => handleFile(fileInput.files[0]));
   })
 );
 dropzone.addEventListener("drop", (e) => {
+  e.stopPropagation();
   const file = e.dataTransfer.files[0];
   if (file) handleFile(file);
 });
