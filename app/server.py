@@ -784,6 +784,7 @@ async def session_source(session_id: str):
 
 class LyricsUpdate(BaseModel):
     lyrics: str
+    expected_lyrics: str | None = None
 
 
 @app.post("/api/sessions/{session_id}/transcribe-whisper")
@@ -852,6 +853,9 @@ async def save_session_lyrics(session_id: str, request: LyricsUpdate):
         raise HTTPException(404, "Unknown saved song")
     if not session.ready or session.active_job_id or session.active_batch_id:
         raise HTTPException(409, "Wait for preparation to finish")
+    if request.expected_lyrics is not None and session.lyrics != request.expected_lyrics:
+        raise HTTPException(409, "Lyrics changed in another window. Reopen the song before editing.")
+    session.transcription = whisper_transcribe.correct_words(session.transcription, session.lyrics, request.lyrics)
     session.lyrics = request.lyrics
     session_store.save(session)
     return {"saved": True, "lyric_timing": whisper_transcribe.timing_view(session.transcription, session.lyrics, session.tmp_dir)}

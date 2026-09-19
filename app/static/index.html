@@ -99,6 +99,7 @@
       <button class="btn" id="tightenTimingBtn" type="button" disabled>Tighten word timing</button>
       <p class="hint">Replaces the lyric text with the saved Whisper transcript, or transcribes it on first use. Previous lyrics are retained in the song folder.</p>
       <p class="hint" id="timingSummary"></p>
+      <p class="hint">Use Edit beside a timed word to correct its text without moving its timing. Replacing words in the lyrics box also preserves timing when the word count stays the same.</p>
       <div id="wordTimings" style="display:flex;flex-wrap:wrap;gap:6px;max-height:220px;overflow:auto"></div>
       <div id="vocalPreview" hidden>
         <p class="hint">Isolated vocals used for lyrics and vocal melody</p>
@@ -215,6 +216,6 @@
 
 <div class="toast" id="toast" hidden></div>
 
-<script src="app.js?v=20260919-upload"></script>
+<script src="app.js?v=20260919-word-edit"></script>
 </body>
 </html>

@@ -133,7 +133,10 @@ function renderTiming(timing) {
   $("tightenTimingBtn").disabled = !timing?.current;
   $("wordTimings").replaceChildren();
   $("timingSummary").textContent = timing ? timing.message : "No word timings saved yet. Use Whisper large-v3 to add them.";
-  for (const word of timing?.words || []) {
+  const savedLyrics = lyricsText.value;
+  for (const [index, word] of (timing?.words || []).entries()) {
+    const group = document.createElement("span");
+    group.style.cssText = "display:inline-flex;gap:3px;align-items:center";
     const button = document.createElement("button");
     button.type = "button";
     button.className = "btn";
@@ -144,11 +147,65 @@ function renderTiming(timing) {
     if (word.original_start !== undefined) {
       button.title += `\nOriginal: ${word.original_start.toFixed(2)}–${word.original_end.toFixed(2)}s\nAlignment score: ${word.alignment_score ?? 'unavailable'} · ${word.alignment_status}`;
     }
+    if (word.text_edited) button.title += `\nCorrected text; confidence belongs to the original recognition: ${word.recognized_text}`;
     button.addEventListener("click", () => {
       sourceAudio.currentTime = word.start;
       sourceAudio.play().catch(e => showToast(e.message));
     });
-    $("wordTimings").appendChild(button);
+    const edit = document.createElement("button");
+    edit.type = "button";
+    edit.className = "btn";
+    edit.textContent = "Edit";
+    edit.setAttribute("aria-label", `Edit word ${index + 1}: ${word.text}`);
+    edit.addEventListener("click", () => {
+      if (preparingSong || generatingCover) { showToast("Wait for the current run to finish."); return; }
+      const input = document.createElement("input");
+      input.value = word.text;
+      input.setAttribute("aria-label", `Replacement for word ${index + 1}`);
+      input.style.width = "130px";
+      const save = document.createElement("button");
+      save.type = "button";
+      save.className = "btn";
+      save.textContent = "Save word";
+      const cancel = document.createElement("button");
+      cancel.type = "button";
+      cancel.className = "btn";
+      cancel.textContent = "Cancel";
+      cancel.onclick = () => group.replaceChildren(button, edit);
+      save.onclick = async () => {
+        const text = input.value.trim();
+        if (!text || /\s/.test(text)) { showToast("Enter one word. Its timing will stay unchanged."); return; }
+        const spans = [...savedLyrics.matchAll(/\S+/g)];
+        if (spans.length !== timing.words.length || lyricsText.value !== savedLyrics) {
+          showToast("Save your lyric changes before editing a timed word."); return;
+        }
+        const span = spans[index];
+        const lyrics = savedLyrics.slice(0, span.index) + text + savedLyrics.slice(span.index + span[0].length);
+        save.disabled = true;
+        preparingSong = true;
+        lyricsText.disabled = true;
+        try {
+          const res = await fetch(`/api/sessions/${sessionId}/lyrics`, {
+            method: "PUT", headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({lyrics, expected_lyrics: savedLyrics}),
+          });
+          if (!res.ok) throw new Error(await res.text());
+          lyricsText.value = lyrics;
+          renderTiming((await res.json()).lyric_timing);
+          showToast("Word saved. Timing unchanged.");
+        } catch (e) { showToast(e.message); save.disabled = false; }
+        finally { preparingSong = false; lyricsText.disabled = false; }
+      };
+      input.onkeydown = e => {
+        if (e.key === "Enter") { e.preventDefault(); save.click(); }
+        if (e.key === "Escape") cancel.click();
+      };
+      group.replaceChildren(input, save, cancel);
+      input.focus();
+      input.select();
+    });
+    group.append(button, edit);
+    $("wordTimings").appendChild(group);
   }
 }
 

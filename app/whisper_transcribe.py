@@ -1,6 +1,7 @@
 """Durable word timestamps and overlap links to SheetSage2 vocal notes."""
 import asyncio
 import hashlib
+import copy
 import json
 import os
 from pathlib import Path
@@ -13,6 +14,24 @@ _lock = asyncio.Lock()
 
 def normalized(text):
     return re.findall(r"\w+", text.casefold())
+
+
+def correct_words(transcription, old_lyrics, new_lyrics):
+    """Replace word labels by position, retaining every timing and analysis field."""
+    if not transcription or normalized(transcription['text']) != normalized(old_lyrics or ''):
+        return transcription
+    replacements = new_lyrics.split()
+    old_words = (old_lyrics or '').split()
+    if len(replacements) != len(transcription['words']) or len(old_words) != len(replacements):
+        return transcription
+    result = copy.deepcopy(transcription)
+    result['text'] = new_lyrics
+    for word, text in zip(result['words'], replacements):
+        if word['text'] != text:
+            word.setdefault('recognized_text', word['text'])
+            word['text'] = text
+            word['text_edited'] = True
+    return result
 
 
 def timing_view(transcription, lyrics, folder):
