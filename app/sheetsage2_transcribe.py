@@ -9,17 +9,20 @@ on.
 from __future__ import annotations
 
 import threading
+import copy
+import importlib
+import json
 from pathlib import Path
 
-import torch
-from transformers import AutoModel
 
 _MODEL_ID = "m-a-p/SheetSage2"
 _lock = threading.Lock()
 _model = None
+_inference_lock = threading.Lock()
 
 
 def _load_model():
+    from transformers import AutoModel
     global _model
     if _model is None:
         with _lock:
@@ -36,6 +39,7 @@ def transcribe(audio_path: str, output_dir: str) -> dict:
     Returns {"abc": str, "warnings": list[str]}. Raises RuntimeError if no
     usable score was produced.
     """
+    import torch
     model = _load_model()
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     with torch.no_grad():
@@ -54,3 +58,78 @@ def transcribe(audio_path: str, output_dir: str) -> dict:
         abc_path.write_text(abc_text, encoding="utf-8")
 
     return {"abc": abc_text, "warnings": result.get("warnings", [])}
+
+
+def merge_events(vocal_events: list, mix_events: list) -> list:
+    """Use absolute audio seconds; only the full mix supplies rhythm/key/chords."""
+    combined = []
+    for original in mix_events:
+        event = copy.deepcopy(original)
+        if "melody" in event["values"]:
+            event["values"]["melody"] = [
+                n for n in event["values"]["melody"] if int(n["track"]) == 1
+            ]
+        combined.append(event)
+    for original in vocal_events:
+        notes = [copy.deepcopy(n) for n in original["values"].get("melody", [])
+                 if int(n["track"]) == 0]
+        if notes:
+            combined.append({"time": original["time"],
+                             "global_subbeat": original["global_subbeat"],
+                             "values": {"melody": notes}})
+    return sorted(combined, key=lambda event: (event["time"], event["global_subbeat"]))
+
+
+def transcribe_cover(vocals_path: str, source_path: str, output_dir: str, on_stage=None) -> dict:
+    """Combine the isolated sung melody with the original instrumental part.
+
+    Both inputs retain the original zero point. The native exporter quantizes
+    their timed notes together on the full mix's beat grid, avoiding ABC splicing
+    between independently estimated tempos/keys.
+    """
+    import torch
+
+    def report(stage):
+        if on_stage:
+            on_stage(stage)
+
+    def analyze(model, audio, directory):
+        cache = directory / "analysis-complete.json"
+        if cache.is_file():
+            return json.loads(cache.read_text(encoding="utf-8"))
+        result = model.transcribe(audio, output_dir=directory, melody_only=False)
+        reusable = {key: result[key] for key in ("events", "duration_seconds", "prompts", "warnings")}
+        temporary = cache.with_suffix(".tmp")
+        temporary.write_text(json.dumps(reusable), encoding="utf-8")
+        temporary.replace(cache)
+        return reusable
+
+    folder = Path(output_dir)
+    with _inference_lock, torch.inference_mode():
+        report("Transcribing vocal melody")
+        model = _load_model()
+        # Full mode retains raw events even if vocals alone lack enough beat/key
+        # information to produce their own score. We use the mix's grid below.
+        vocals = analyze(model, vocals_path, folder / "vocal-melody")
+        report("Transcribing instrumental melody from full song")
+        full = analyze(model, source_path, folder / "full-song")
+        events = merge_events(vocals["events"], full["events"])
+        exporter = importlib.import_module(model.__class__.__module__.rsplit(".", 1)[0] + ".exports_sheetsage2")
+        decoded = {"schema_version": model.tokenizer.schema_version,
+                   "prompts": full["prompts"], "events": events, "has_eos": True}
+        results = {}
+        for name, melody_only in (("melody", True), ("full", False)):
+            exported = exporter.export_result(decoded, model.tokenizer, folder / name,
+                                              full["duration_seconds"], melody_only=melody_only)
+            payload = exported["payload"]
+            if exported.get("abc_error") or not payload.get("abc"):
+                raise RuntimeError(exported.get("abc_error") or "Combined melody score is empty")
+            results[name] = payload["abc"]
+        metadata = {
+            "vocal_source": "stems/vocals.wav", "instrumental_source": "original recording",
+            "rhythm_key_chords_source": "original recording", "timeline_offset_seconds": 0,
+            "vocal_notes": exported["vocal_notes"], "instrumental_notes": exported["instrumental_notes"],
+            "warnings": vocals.get("warnings", []) + full.get("warnings", []) + exported.get("diagnostics", []),
+        }
+        (folder / "provenance.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+        return {"abc": results["melody"], "full_abc": results["full"], **metadata}

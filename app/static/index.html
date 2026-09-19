@@ -46,9 +46,17 @@
   <section class="panel" data-tab="source">
     <div class="panel-head">
       <h2>Source</h2>
-      <p class="panel-sub">Drop in the recording, then transcribe the lyrics &mdash; you'll get a chance to fix them before anything is generated.</p>
+      <p class="panel-sub">Separate the vocals, transcribe the lyrics and vocal melody, then read the instrumental melody from the full song. Review before generating.</p>
     </div>
     <div class="panel-body">
+      <div class="row">
+        <label class="field" for="savedSongSelect"><span class="field-label">Saved songs</span>
+          <select id="savedSongSelect"><option value="">Choose a saved song</option></select>
+        </label>
+        <button class="btn" id="openSessionBtn" type="button">Open song</button>
+        <button class="btn" id="refreshSessionsBtn" type="button">Refresh</button>
+      </div>
+      <p class="hint" id="sessionHint">Songs and analysis are saved so you can make more covers later.</p>
       <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-label="Choose a source recording">
         <div class="dropzone-inner">
           <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M12 3v12" stroke-linecap="round"/><path d="M7 10l5 5 5-5" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 19h16" stroke-linecap="round"/></svg>
@@ -63,8 +71,8 @@
       </div>
 
       <div class="row">
-        <button class="btn btn-primary" id="transcribeBtn" disabled>Transcribe lyrics</button>
-        <span class="hint" id="transcribeHint">Speech-to-text over the vocals. Runs on the engine &mdash; usually under a minute.</span>
+        <button class="btn btn-primary" id="transcribeBtn" disabled>Prepare song</button>
+        <span class="hint" id="transcribeHint">Vocal separation and both melody passes can take several minutes. Your original recording stays intact.</span>
       </div>
 
       <div class="progress progress-simple" id="lyricsProgress" hidden>
@@ -86,6 +94,18 @@
     </div>
     <div class="panel-body">
       <textarea id="lyricsText" class="abc-input" rows="8" placeholder="Transcribed lyrics will appear here." spellcheck="true"></textarea>
+      <button class="btn" id="saveLyricsBtn" type="button" disabled>Save lyrics</button>
+      <button class="btn" id="whisperBtn" type="button" disabled>Use Whisper large-v3 lyrics + timing</button>
+      <button class="btn" id="tightenTimingBtn" type="button" disabled>Tighten word timing</button>
+      <p class="hint">Replaces the lyric text with the saved Whisper transcript, or transcribes it on first use. Previous lyrics are retained in the song folder.</p>
+      <p class="hint" id="timingSummary"></p>
+      <div id="wordTimings" style="display:flex;flex-wrap:wrap;gap:6px;max-height:220px;overflow:auto"></div>
+      <div id="vocalPreview" hidden>
+        <p class="hint">Isolated vocals used for lyrics and vocal melody</p>
+        <audio id="vocalAudio" controls preload="none" aria-label="Isolated vocals"></audio>
+        <p class="hint" id="melodySummary"></p>
+      </div>
+      <div id="savedCovers"></div>
     </div>
   </section>
 
@@ -157,7 +177,7 @@
 
       <div class="row">
         <button class="btn btn-primary btn-large" id="runBtn" disabled>Make covers</button>
-        <span class="hint" id="runHint">Transcribes the melody, then generates every style you picked, one at a time, using the lyrics above. The active generation device is shown at the top.</span>
+        <span class="hint" id="runHint">Generates each selected style using your reviewed lyrics, the isolated vocal melody, and the instrumental melody from the full song. Full mode also retains harmony.</span>
       </div>
 
       <div class="progress" id="progress" hidden>

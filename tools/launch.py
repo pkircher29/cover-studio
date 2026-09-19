@@ -18,8 +18,8 @@ ARENAS = {'model_weight_context': 64, 'vae_weight_context': 64,
           'nar_graph_arena': 128, 'vae_graph_arena': 128}
 
 
-def wait_ready(url, process):
-    deadline = time.monotonic() + 60
+def wait_ready(url, process, timeout_seconds=60):
+    deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
         if process.poll() is not None:
             raise RuntimeError(f'Process exited ({process.returncode}); see .runtime logs')
@@ -38,8 +38,8 @@ def main():
     parser.add_argument('--engine-dir', type=Path, default=local.get('engine_dir', ROOT.parent / 'audio.cpp'))
     parser.add_argument('--backend', choices=['vulkan', 'cuda', 'cpu'], default=local.get('backend', 'vulkan'))
     parser.add_argument('--device', default=local.get('device'), help='Device index or unique name fragment')
-    parser.add_argument('--engine-port', type=int, default=8180)
-    parser.add_argument('--app-port', type=int, default=8420)
+    parser.add_argument('--engine-port', type=int, default=local.get('engine_port', 8180))
+    parser.add_argument('--app-port', type=int, default=local.get('app_port', 8420))
     parser.add_argument('--no-browser', action='store_true')
     args = parser.parse_args()
     engine_dir = args.engine_dir.resolve()
@@ -51,7 +51,18 @@ def main():
             if sock.connect_ex(('127.0.0.1', port)) == 0:
                 raise RuntimeError(f'Port {port} is in use. Close the existing Cover Studio launcher first.')
     env = os.environ.copy()
+    for key, variable in (('demucs_python', 'DEMUCS_PYTHON'), ('demucs_device', 'DEMUCS_DEVICE'),
+                          ('torch_home', 'TORCH_HOME'), ('whisper_python', 'WHISPER_PYTHON'),
+                          ('whisper_models', 'WHISPER_MODELS'), ('alignment_python', 'ALIGNMENT_PYTHON'),
+                          ('alignment_models', 'ALIGNMENT_MODELS')):
+        if key in local:
+            env[variable] = str(local[key])
     env.pop('GGML_VK_VISIBLE_DEVICES', None)
+    if 'nar_chunk_tokens' in local:
+        chunk_tokens = int(local['nar_chunk_tokens'])
+        if not 1 <= chunk_tokens <= 8192:
+            raise ValueError('nar_chunk_tokens must be in [1,8192]')
+        env['AUDIOCPP_YUE2_NAR_CHUNK_TOKENS'] = str(chunk_tokens)
     if env.get('CUDA_PATH'):
         env['PATH'] = str(Path(env['CUDA_PATH']) / 'bin' / 'x64') + os.pathsep + env['PATH']
     listed = subprocess.run([str(exe), '--list-devices'], env=env, cwd=engine_dir,
@@ -76,13 +87,26 @@ def main():
         cfg['device'] = 0
     for model in cfg['models']:
         if 'path' in model:
-            model['path'] = str((engine_dir / model['path']).resolve())
+            model_path = (engine_dir / model['path']).resolve()
+            if local.get('model_dir'):
+                model_path = Path(local['model_dir']) / model_path.name
+            # A moved Windows checkout can retain absolute paths on its old drive.
+            if not model_path.exists():
+                relocated = engine_dir / 'models' / model_path.name
+                if relocated.exists():
+                    model_path = relocated.resolve()
+                else:
+                    raise FileNotFoundError(f'Model directory is missing: {model_path}')
+            model['path'] = str(model_path)
         if model.get('family') == 'yue2':
             options = model.setdefault('session_options', {})
             for key, value in ARENAS.items():
                 options.setdefault(f'yue2.{key}_mb', str(value))
     runtime = ROOT / '.runtime'
     runtime.mkdir(exist_ok=True)
+    temp_dir = Path(local.get('temp_dir', runtime / 'temp')).resolve()
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    env.update(TMP=str(temp_dir), TEMP=str(temp_dir))
     config_path = runtime / 'engine.json'
     config_path.write_text(json.dumps(cfg, indent=2))
     engine_url = f'http://127.0.0.1:{args.engine_port}'
@@ -104,7 +128,7 @@ def main():
             app = subprocess.Popen([sys.executable, '-m', 'uvicorn', 'server:app', '--host', '127.0.0.1',
                                     '--port', str(args.app_port)], cwd=ROOT / 'app', env=env,
                                    stdout=log, stderr=err, creationflags=flags)
-        health = wait_ready(app_url + '/api/health', app)
+        health = wait_ready(app_url + '/api/health', app, timeout_seconds=300)
         if not health.get('ok'):
             raise RuntimeError('Cover Studio cannot reach the engine')
         (runtime / 'processes.json').write_text(json.dumps({'launcher': os.getpid(), 'engine': engine.pid, 'app': app.pid}))
