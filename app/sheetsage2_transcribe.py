@@ -13,6 +13,7 @@ import copy
 import importlib
 import json
 from pathlib import Path
+from score_grid import rebuild_notation
 
 
 _MODEL_ID = "m-a-p/SheetSage2"
@@ -113,15 +114,22 @@ def transcribe_cover(vocals_path: str, source_path: str, output_dir: str, on_sta
         vocals = analyze(model, vocals_path, folder / "vocal-melody")
         report("Transcribing instrumental melody from full song")
         full = analyze(model, source_path, folder / "full-song")
+        report("Building combined vocal and instrumental score")
         events = merge_events(vocals["events"], full["events"])
         exporter = importlib.import_module(model.__class__.__module__.rsplit(".", 1)[0] + ".exports_sheetsage2")
         decoded = {"schema_version": model.tokenizer.schema_version,
                    "prompts": full["prompts"], "events": events, "has_eos": True}
         results = {}
+        score_warnings = []
         for name, melody_only in (("melody", True), ("full", False)):
             exported = exporter.export_result(decoded, model.tokenizer, folder / name,
                                               full["duration_seconds"], melody_only=melody_only)
             payload = exported["payload"]
+            if exported.get("abc_error") and any(reason in exported["abc_error"] for reason in (
+                "cannot be represented on the decoded subbeat grid", "overlapping quantized melody notes")):
+                payload["abc"], warnings = rebuild_notation(exporter, folder / name, melody_only)
+                exported["abc_error"] = None
+                score_warnings.extend(warnings)
             if exported.get("abc_error") or not payload.get("abc"):
                 raise RuntimeError(exported.get("abc_error") or "Combined melody score is empty")
             results[name] = payload["abc"]
@@ -129,7 +137,7 @@ def transcribe_cover(vocals_path: str, source_path: str, output_dir: str, on_sta
             "vocal_source": "stems/vocals.wav", "instrumental_source": "original recording",
             "rhythm_key_chords_source": "original recording", "timeline_offset_seconds": 0,
             "vocal_notes": exported["vocal_notes"], "instrumental_notes": exported["instrumental_notes"],
-            "warnings": vocals.get("warnings", []) + full.get("warnings", []) + exported.get("diagnostics", []),
+            "warnings": vocals.get("warnings", []) + full.get("warnings", []) + exported.get("diagnostics", []) + score_warnings,
         }
         (folder / "provenance.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
         return {"abc": results["melody"], "full_abc": results["full"], **metadata}
