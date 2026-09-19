@@ -35,6 +35,7 @@ import sheetsage2_transcribe
 import vocal_separation
 import whisper_transcribe
 import session_store
+import cover_lyrics
 from session_store import Session
 
 logging.basicConfig(level=logging.INFO)
@@ -694,6 +695,7 @@ def _session_result(session: Session) -> dict:
     return {"session_id": session.id, "source_name": session.source_name,
             "ready": session.ready, "error": session.error,
             "lyrics": session.lyrics or "", "melody": session.melody,
+            "generation_lyrics": cover_lyrics.prepare(session.lyrics or "", session.transcription, session.tmp_dir),
             "lyric_timing": whisper_transcribe.timing_view(session.transcription, session.lyrics, session.tmp_dir),
             "vocals_url": f"/api/covers/{session.id}/vocals" if session.vocals_path else None,
             "source_url": f"/api/sessions/{session.id}/source",
@@ -858,7 +860,8 @@ async def save_session_lyrics(session_id: str, request: LyricsUpdate):
     session.transcription = whisper_transcribe.correct_words(session.transcription, session.lyrics, request.lyrics)
     session.lyrics = request.lyrics
     session_store.save(session)
-    return {"saved": True, "lyric_timing": whisper_transcribe.timing_view(session.transcription, session.lyrics, session.tmp_dir)}
+    return {"saved": True, "lyric_timing": whisper_transcribe.timing_view(session.transcription, session.lyrics, session.tmp_dir),
+            "generation_lyrics": cover_lyrics.prepare(session.lyrics, session.transcription, session.tmp_dir)}
 
 
 @app.post("/api/sessions/{session_id}/prepare")
@@ -920,23 +923,27 @@ async def generate_covers(
     if not style_ids:
         raise HTTPException(status_code=400, detail="Select at least one style.")
 
+    corrected = whisper_transcribe.correct_words(session.transcription, session.lyrics, lyrics)
+    prepared = cover_lyrics.prepare(lyrics, corrected, session.tmp_dir)
+    if prepared['error']:
+        raise HTTPException(409, prepared['error'])
     batch = Batch(
         id=uuid.uuid4().hex,
         styles=[StyleRun(id=sid, label=STYLE_PRESETS_BY_ID[sid]["label"]) for sid in style_ids],
     )
     BATCHES[batch.id] = batch
-    session.transcription = whisper_transcribe.correct_words(session.transcription, session.lyrics, lyrics)
+    session.transcription = corrected
     session.lyrics = lyrics
     session.active_batch_id = batch.id
     session.generations.append({"batch_id": batch.id, "created_at": time.time(),
-        "status": "running", "lyrics": lyrics, "styles": [],
+        "status": "running", "lyrics": lyrics, "generation_lyrics": prepared['lyrics'], "styles": [],
         "settings": {"styles": style_ids, "cot": cot, "seed": seed,
                      "num_inference_steps": num_inference_steps, "flip_key": flip_key, "vocal": vocal}})
     session_store.save(session)
     asyncio.create_task(
         _run_batch(
             batch, session.source_path, session.tmp_dir, session.source_name,
-            lyrics, cot, seed, num_inference_steps, flip_key, vocal,
+            prepared['lyrics'], cot, seed, num_inference_steps, flip_key, vocal,
             prepared_abc=session.melody["full_abc" if cot == "full" else "abc"] if cot != "off" else "",
             session=session,
         )
