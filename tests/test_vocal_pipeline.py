@@ -109,8 +109,12 @@ class PreparationTests(unittest.IsolatedAsyncioTestCase):
             folder.mkdir()
             source = folder / "source.wav"
             source.write_bytes(b"original")
+            structure = folder / 'scores/melody'
+            structure.mkdir(parents=True)
+            (structure / 'structure.lab').write_text('0 5 verse\n')
             session = server.Session("repeat", str(source), str(folder), "song.wav",
-                ready=True, lyrics="hello", melody={"abc": "melody", "full_abc": "harmony"})
+                ready=True, lyrics="hello", melody={"abc": "melody", "full_abc": "harmony"},
+                transcription={'text': 'hello', 'words': [{'text':'hello','start':1,'end':2}]})
             server.SESSIONS[session.id] = session
             tasks = []
             create_task = asyncio.create_task
@@ -120,12 +124,16 @@ class PreparationTests(unittest.IsolatedAsyncioTestCase):
                 return task
             try:
                 with patch.object(server, "COMPLETED_DIR", Path(root)), \
-                     patch.object(server, "_call_yue2_generate", AsyncMock(return_value=b"wav")), \
+                     patch.object(server, "_call_yue2_generate", AsyncMock(return_value=b"wav")) as generate, \
                      patch.object(server.asyncio, "create_task", side_effect=capture):
                     for seed in (1, 2):
                         await server.generate_covers(session.id, "reviewed", '["keep_original"]',
                                                      "full", seed, 4, False, "any")
                         await tasks[-1]
+                        self.assertEqual(generate.call_args.args[0]['request']['lyrics'], '[Verse]\nreviewed')
+                self.assertEqual(session.lyrics, 'reviewed')
+                self.assertEqual(session.transcription['words'][0]['start'], 1)
+                self.assertEqual(session.generations[-1]['generation_lyrics'], '[Verse]\nreviewed')
                 self.assertEqual(len(session.generations), 2)
                 self.assertTrue(all(run["status"] == "done" for run in session.generations))
                 self.assertEqual(source.read_bytes(), b"original")

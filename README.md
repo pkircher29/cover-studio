@@ -8,9 +8,10 @@ Drop in a recording and it:
 2. Transcribes lyrics and word timestamps with Whisper large-v3 and the sung melody with SheetSage2 from that vocal stem.
 3. Transcribes the original full mix for instrumental melody, beats, key, structure, and chords.
    Combines the vocal notes with the instrumental notes on the full mix's beat grid, then lets you review lyrics and listen to the vocal stem.
-4. Generates a finished cover for every style you multi-select from the presets — editable, and you can add
+4. Builds sectioned generation lyrics from the score's section boundaries and saved word onsets, with line breaks at pauses. The lyrics panel previews this exact input. Saved words and timings remain unchanged; generation history retains both the reviewed text and sectioned input. Manually sectioned lyrics are preserved. Missing or stale timing requires review rather than guessed sections. The default `melody` mode retains both melody voices without chords and leaves the arrangement free, following the [YuE2 cover workflow](https://github.com/multimodal-art-projection/YuE/blob/main/docs/covers.md). Section labels guide phrasing; they do not enforce word-to-note timing.
+5. Generates a finished cover for every style you multi-select from the presets — editable, and you can add
    your own, via the "Manage styles" panel (backed by `app/styles.json`)
-5. Saves each finished take to `completed/` the instant it's done — a crash mid-batch never loses
+6. Saves each finished take to `completed/` the instant it's done — a crash mid-batch never loses
    already-finished styles
 
 Extras: a "Keep Original Style" baseline preset, a major/minor key-flip toggle (edits the transcribed

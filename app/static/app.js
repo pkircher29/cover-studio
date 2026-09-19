@@ -71,6 +71,7 @@ function handleFile(file) {
   $("vocalAudio").removeAttribute("src");
   selectedFile = file;
   lyricsText.value = "";
+  renderGenerationLyrics(null);
   if (sourceAudio.src.startsWith("blob:")) URL.revokeObjectURL(sourceAudio.src);
   sourceAudio.src = URL.createObjectURL(file);
   sourceFilename.textContent = file.name;
@@ -97,6 +98,7 @@ async function refreshSessions() {
 }
 
 function showPreparedSong(data) {
+  renderGenerationLyrics(data.generation_lyrics);
   sessionReady = data.ready;
   sessionId = data.session_id;
   lyricsText.value = data.lyrics || "";
@@ -127,6 +129,10 @@ function showPreparedSong(data) {
       $("savedCovers").appendChild(row);
     }
   }
+}
+
+function renderGenerationLyrics(prepared) {
+  $("generationLyrics").textContent = prepared?.error || prepared?.lyrics || "Prepare a song to preview its sectioned lyrics.";
 }
 
 function renderTiming(timing) {
@@ -191,7 +197,9 @@ function renderTiming(timing) {
           });
           if (!res.ok) throw new Error(await res.text());
           lyricsText.value = lyrics;
-          renderTiming((await res.json()).lyric_timing);
+          const saved = await res.json();
+          renderTiming(saved.lyric_timing);
+          renderGenerationLyrics(saved.generation_lyrics);
           showToast("Word saved. Timing unchanged.");
         } catch (e) { showToast(e.message); save.disabled = false; }
         finally { preparingSong = false; lyricsText.disabled = false; }
@@ -210,6 +218,7 @@ function renderTiming(timing) {
 }
 
 lyricsText.addEventListener("input", () => {
+  $("generationLyrics").textContent = "Save lyrics to update the sectioned preview.";
   $("tightenTimingBtn").disabled = true;
   $("wordTimings").replaceChildren();
   $("timingSummary").textContent = "Lyrics edited. Save to check whether the stored word timings still match.";
@@ -288,7 +297,9 @@ $("saveLyricsBtn").addEventListener("click", async () => {
       body: JSON.stringify({lyrics: lyricsText.value}),
     });
     if (!res.ok) throw new Error(await res.text());
-    renderTiming((await res.json()).lyric_timing);
+    const saved = await res.json();
+    renderTiming(saved.lyric_timing);
+    renderGenerationLyrics(saved.generation_lyrics);
     showToast("Lyrics saved.");
   } catch (err) { showToast(err.message); }
 });
