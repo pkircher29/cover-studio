@@ -7,9 +7,8 @@ A local, one-click song-cover generator built on [YuE2](https://huggingface.co/m
 
 Drop in a recording and it:
 1. Separates vocals with Demucs `htdemucs_ft`, preserving the original duration and zero point.
-2. Transcribes lyrics and word timestamps with Whisper large-v3 and the sung melody with SheetSage2 from that vocal stem.
-3. Transcribes the original full mix for instrumental melody, beats, key, structure, and chords.
-   Combines the vocal notes with the instrumental notes on the full mix's beat grid, then lets you review lyrics and listen to the vocal stem.
+2. Transcribes lyrics and word timestamps with Whisper large-v3 from the isolated vocal stem.
+3. Runs SheetSage2 once on the original full recording with `melody_only=True`. Uses its exported ABC directly, including both melody parts. No stem-note merging or custom grid repair runs. Saved sessions with older combined scores require Resume preparation, which reuses their vocals and reviewed lyrics. The direct score is stored under `scores/direct-song/` alongside retained older artifacts.
 4. Builds sectioned generation lyrics from the score's section boundaries and saved word onsets, with line breaks at pauses. The lyrics panel previews this exact input. Saved words and timings remain unchanged; generation history retains both the reviewed text and sectioned input. Manually sectioned lyrics are preserved. Missing or stale timing requires review rather than guessed sections. The default `melody` mode retains both melody voices without chords and leaves the arrangement free, following the [YuE2 cover workflow](https://github.com/multimodal-art-projection/YuE/blob/main/docs/covers.md). Section labels guide phrasing; they do not enforce word-to-note timing.
 5. Generates a finished cover for every style you multi-select from the presets — editable, and you can add
    your own, via the "Manage styles" panel (backed by `app/styles.json`)

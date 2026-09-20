@@ -18,6 +18,9 @@ def prepare(lyrics, transcription, folder):
     if not words or text != recognized or len(lyrics.split()) != len(words):
         return {'lyrics': '', 'error': 'Save matching word corrections before generating, or add section labels such as [Verse] and [Chorus] to your reviewed lyrics.', 'method': None}
     path = Path(folder) / 'scores/melody/structure.lab'
+    direct = Path(folder) / 'scores/direct-song/structure.lab'
+    if direct.is_file():
+        path = direct
     if not path.is_file():
         return {'lyrics': '', 'error': 'Song section analysis is missing. Resume preparation or add section labels to your reviewed lyrics.', 'method': None}
     sections = []

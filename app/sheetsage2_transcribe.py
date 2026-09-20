@@ -82,6 +82,37 @@ def merge_events(vocal_events: list, mix_events: list) -> list:
 
 
 def transcribe_cover(vocals_path: str, source_path: str, output_dir: str, on_stage=None) -> dict:
+    """One full-recording pass; use the model's melody-only export verbatim."""
+    import torch
+    folder = Path(output_dir) / 'direct-song'
+    folder.mkdir(parents=True, exist_ok=True)
+    cache = folder / 'analysis-complete.json'
+    with _inference_lock, torch.inference_mode():
+        if on_stage:
+            on_stage('Transcribing full-song melody with SheetSage2')
+        if cache.is_file():
+            result = json.loads(cache.read_text(encoding='utf-8'))
+        else:
+            result = _load_model().transcribe(source_path, output_dir=str(folder), melody_only=True)
+            if result.get('abc_error') or not result.get('abc'):
+                raise RuntimeError(result.get('abc_error') or 'SheetSage2 did not export a usable score')
+            stored = {k: result[k] for k in ('abc', 'events', 'duration_seconds', 'warnings') if k in result}
+            temporary = cache.with_suffix('.tmp')
+            temporary.write_text(json.dumps(stored), encoding='utf-8')
+            temporary.replace(cache)
+        counts = [0, 0]
+        for event in result.get('events', []):
+            for note in event.get('values', {}).get('melody', []):
+                track = int(note['track'])
+                if track in (0, 1):
+                    counts[track] += 1
+        return {'abc': result['abc'], 'pipeline': 'sheetsage2-direct-full-song-v1',
+                'vocal_source': 'original recording', 'instrumental_source': 'original recording',
+                'vocal_notes': counts[0], 'instrumental_notes': counts[1],
+                'warnings': result.get('warnings', [])}
+
+
+def transcribe_cover_legacy(vocals_path: str, source_path: str, output_dir: str, on_stage=None) -> dict:
     """Combine the isolated sung melody with the original instrumental part.
 
     Both inputs retain the original zero point. The native exporter quantizes
