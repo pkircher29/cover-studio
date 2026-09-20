@@ -26,6 +26,7 @@ class Session:
     generations: list = field(default_factory=list)
     active_job_id: str | None = None
     active_batch_id: str | None = None
+    lyrics_reviewed: bool = False
 
 
 def save(session: Session) -> None:

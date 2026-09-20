@@ -695,7 +695,8 @@ def _session_result(session: Session) -> dict:
     return {"session_id": session.id, "source_name": session.source_name,
             "ready": session.ready, "error": session.error,
             "lyrics": session.lyrics or "", "melody": session.melody,
-            "generation_lyrics": cover_lyrics.prepare(session.lyrics or "", session.transcription, session.tmp_dir),
+            "generation_lyrics": ({"lyrics": session.lyrics or "", "error": None, "method": "user-edited"}
+                if session.lyrics_reviewed else cover_lyrics.prepare(session.lyrics or "", session.transcription, session.tmp_dir)),
             "lyric_timing": whisper_transcribe.timing_view(session.transcription, session.lyrics, session.tmp_dir),
             "vocals_url": f"/api/covers/{session.id}/vocals" if session.vocals_path else None,
             "source_url": f"/api/sessions/{session.id}/source",
@@ -819,6 +820,7 @@ async def _run_whisper_job(job: Job, session: Session, timing_only: bool = False
         session.transcription = result
         if not timing_only:
             session.lyrics = result["text"]
+            session.lyrics_reviewed = False
         job.status = "done"
         job.stage = "Done"
         job.result = _session_result(session)
@@ -859,9 +861,10 @@ async def save_session_lyrics(session_id: str, request: LyricsUpdate):
         raise HTTPException(409, "Lyrics changed in another window. Reopen the song before editing.")
     session.transcription = whisper_transcribe.correct_words(session.transcription, session.lyrics, request.lyrics)
     session.lyrics = request.lyrics
+    session.lyrics_reviewed = True
     session_store.save(session)
     return {"saved": True, "lyric_timing": whisper_transcribe.timing_view(session.transcription, session.lyrics, session.tmp_dir),
-            "generation_lyrics": cover_lyrics.prepare(session.lyrics, session.transcription, session.tmp_dir)}
+            "generation_lyrics": {"lyrics": session.lyrics, "error": None, "method": "user-edited"}}
 
 
 @app.post("/api/sessions/{session_id}/prepare")
@@ -899,6 +902,7 @@ async def generate_covers(
     num_inference_steps: int = Form(16),
     flip_key: bool = Form(False),
     vocal: str = Form("any"),
+    lyrics_reviewed: bool = Form(False),
 ):
     session = SESSIONS.get(session_id)
     if session is None:
@@ -924,7 +928,9 @@ async def generate_covers(
         raise HTTPException(status_code=400, detail="Select at least one style.")
 
     corrected = whisper_transcribe.correct_words(session.transcription, session.lyrics, lyrics)
-    prepared = cover_lyrics.prepare(lyrics, corrected, session.tmp_dir)
+    manual = session.lyrics_reviewed or lyrics_reviewed is True
+    prepared = ({"lyrics": lyrics, "error": None, "method": "user-edited"} if manual
+                else cover_lyrics.prepare(lyrics, corrected, session.tmp_dir))
     if prepared['error']:
         raise HTTPException(409, prepared['error'])
     batch = Batch(
@@ -934,6 +940,7 @@ async def generate_covers(
     BATCHES[batch.id] = batch
     session.transcription = corrected
     session.lyrics = lyrics
+    session.lyrics_reviewed = manual
     session.active_batch_id = batch.id
     session.generations.append({"batch_id": batch.id, "created_at": time.time(),
         "status": "running", "lyrics": lyrics, "generation_lyrics": prepared['lyrics'], "styles": [],

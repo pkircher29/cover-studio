@@ -1,5 +1,7 @@
 # Cover Studio
 
+The main lyrics box includes editable section labels and line breaks. Save lyrics or Make covers preserves your exact version in the song session; automatic sectioning never replaces a reviewed version. Changing section labels alone preserves word timings. Adding, deleting, or reordering sung words may require realignment. Timed-word correction ignores section labels when locating words.
+
 A local, one-click song-cover generator built on [YuE2](https://huggingface.co/m-a-p/YuE2-3B) via the
 [audio.cpp](https://github.com/0xShug0/audio.cpp) inference engine.
 

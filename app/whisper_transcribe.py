@@ -12,20 +12,25 @@ ROOT = Path(__file__).resolve().parents[1]
 _lock = asyncio.Lock()
 
 
+def lyric_words(text):
+    """Section headers are editable structure, not sung words."""
+    return re.sub(r'(?m)^[ \t]*\[[^\]\n]+\][ \t]*$', '', text).split()
+
+
 def normalized(text):
-    return re.findall(r"\w+", text.casefold())
+    return re.findall(r"\w+", ' '.join(lyric_words(text)).casefold())
 
 
 def correct_words(transcription, old_lyrics, new_lyrics):
     """Replace word labels by position, retaining every timing and analysis field."""
     if not transcription or normalized(transcription['text']) != normalized(old_lyrics or ''):
         return transcription
-    replacements = new_lyrics.split()
-    old_words = (old_lyrics or '').split()
+    replacements = lyric_words(new_lyrics)
+    old_words = lyric_words(old_lyrics or '')
     if len(replacements) != len(transcription['words']) or len(old_words) != len(replacements):
         return transcription
     result = copy.deepcopy(transcription)
-    result['text'] = new_lyrics
+    result['text'] = re.sub(r'(?m)^[ \t]*\[[^\]\n]+\][ \t]*$', '', new_lyrics).strip()
     for word, text in zip(result['words'], replacements):
         if word['text'] != text:
             word.setdefault('recognized_text', word['text'])

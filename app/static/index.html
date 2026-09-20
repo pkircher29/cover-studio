@@ -95,10 +95,7 @@
     <div class="panel-body">
       <textarea id="lyricsText" class="abc-input" rows="8" placeholder="Transcribed lyrics will appear here." spellcheck="true"></textarea>
       <button class="btn" id="saveLyricsBtn" type="button" disabled>Save lyrics</button>
-      <details><summary>Preview lyrics sent to the generator</summary>
-        <p class="hint">Sections follow the detected score; line breaks follow vocal pauses. Review the words above and save to update this preview. These labels guide phrasing, not exact word timing.</p>
-        <pre id="generationLyrics" style="white-space: pre-wrap"></pre>
-      </details>
+      <p class="hint" id="generationLyrics">Edit the lyrics, section labels, and line breaks directly above. Save lyrics keeps your version; Make covers also saves and uses your edits. Section-only edits preserve word timings.</p>
       <button class="btn" id="whisperBtn" type="button" disabled>Use Whisper large-v3 lyrics + timing</button>
       <button class="btn" id="tightenTimingBtn" type="button" disabled>Tighten word timing</button>
       <p class="hint">Replaces the lyric text with the saved Whisper transcript, or transcribes it on first use. Previous lyrics are retained in the song folder.</p>
@@ -220,6 +217,6 @@
 
 <div class="toast" id="toast" hidden></div>
 
-<script src="app.js?v=20260919-sectioned-lyrics"></script>
+<script src="app.js?v=20260919-edit-sections"></script>
 </body>
 </html>

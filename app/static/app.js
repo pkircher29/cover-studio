@@ -97,11 +97,14 @@ async function refreshSessions() {
   if (sessionId) select.value = sessionId;
 }
 
+let persistedLyrics = "";
+
 function showPreparedSong(data) {
   renderGenerationLyrics(data.generation_lyrics);
   sessionReady = data.ready;
   sessionId = data.session_id;
-  lyricsText.value = data.lyrics || "";
+  persistedLyrics = data.lyrics || "";
+  lyricsText.value = data.generation_lyrics?.lyrics || persistedLyrics;
   $("saveLyricsBtn").disabled = !data.ready;
   $("whisperBtn").disabled = !data.ready || !!data.active_job_id || !!data.active_batch_id;
   renderTiming(data.lyric_timing);
@@ -132,7 +135,7 @@ function showPreparedSong(data) {
 }
 
 function renderGenerationLyrics(prepared) {
-  $("generationLyrics").textContent = prepared?.error || prepared?.lyrics || "Prepare a song to preview its sectioned lyrics.";
+  $("generationLyrics").textContent = prepared?.error || "Edit the lyrics, section labels, and line breaks directly above. Save lyrics keeps your version; Make covers also saves and uses your edits. Section-only edits preserve word timings.";
 }
 
 function renderTiming(timing) {
@@ -140,6 +143,7 @@ function renderTiming(timing) {
   $("wordTimings").replaceChildren();
   $("timingSummary").textContent = timing ? timing.message : "No word timings saved yet. Use Whisper large-v3 to add them.";
   const savedLyrics = lyricsText.value;
+  const expectedLyrics = persistedLyrics;
   for (const [index, word] of (timing?.words || []).entries()) {
     const group = document.createElement("span");
     group.style.cssText = "display:inline-flex;gap:3px;align-items:center";
@@ -181,7 +185,8 @@ function renderTiming(timing) {
       save.onclick = async () => {
         const text = input.value.trim();
         if (!text || /\s/.test(text)) { showToast("Enter one word. Its timing will stay unchanged."); return; }
-        const spans = [...savedLyrics.matchAll(/\S+/g)];
+        const spans = [...savedLyrics.matchAll(/^[ \t]*\[[^\]\n]+\][ \t]*$|\S+/gm)]
+          .filter(span => !/^[ \t]*\[/.test(span[0]));
         if (spans.length !== timing.words.length || lyricsText.value !== savedLyrics) {
           showToast("Save your lyric changes before editing a timed word."); return;
         }
@@ -193,10 +198,11 @@ function renderTiming(timing) {
         try {
           const res = await fetch(`/api/sessions/${sessionId}/lyrics`, {
             method: "PUT", headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({lyrics, expected_lyrics: savedLyrics}),
+            body: JSON.stringify({lyrics, expected_lyrics: expectedLyrics}),
           });
           if (!res.ok) throw new Error(await res.text());
           lyricsText.value = lyrics;
+          persistedLyrics = lyrics;
           const saved = await res.json();
           renderTiming(saved.lyric_timing);
           renderGenerationLyrics(saved.generation_lyrics);
@@ -218,7 +224,7 @@ function renderTiming(timing) {
 }
 
 lyricsText.addEventListener("input", () => {
-  $("generationLyrics").textContent = "Save lyrics to update the sectioned preview.";
+  $("generationLyrics").textContent = "Unsaved edits. Save lyrics or Make covers to keep this version.";
   $("tightenTimingBtn").disabled = true;
   $("wordTimings").replaceChildren();
   $("timingSummary").textContent = "Lyrics edited. Save to check whether the stored word timings still match.";
@@ -294,10 +300,11 @@ $("saveLyricsBtn").addEventListener("click", async () => {
   try {
     const res = await fetch(`/api/sessions/${sessionId}/lyrics`, {
       method: "PUT", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({lyrics: lyricsText.value}),
+      body: JSON.stringify({lyrics: lyricsText.value, expected_lyrics: persistedLyrics}),
     });
     if (!res.ok) throw new Error(await res.text());
     const saved = await res.json();
+    persistedLyrics = lyricsText.value;
     renderTiming(saved.lyric_timing);
     renderGenerationLyrics(saved.generation_lyrics);
     showToast("Lyrics saved.");
@@ -663,6 +670,7 @@ runBtn.addEventListener("click", async () => {
 
   const form = new FormData();
   form.append("lyrics", lyricsText.value);
+  form.append("lyrics_reviewed", "true");
   form.append("styles", JSON.stringify(styleIds));
   form.append("cot", $("cotSelect").value);
   form.append("seed", $("seedInput").value || "831001");
@@ -677,6 +685,7 @@ runBtn.addEventListener("click", async () => {
       throw new Error(detail || `Could not start (${startRes.status})`);
     }
     const { batch_id } = await startRes.json();
+    persistedLyrics = form.get("lyrics");
     $("vocalAudio").pause();
 
     await watchEvents(
