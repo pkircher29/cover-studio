@@ -25,5 +25,16 @@ class CoverLyricsTests(unittest.TestCase):
     def test_manual_sections_retained(self):
         text='[Verse]\nMy words\n[Chorus]\nMy chorus'
         self.assertEqual(prepare(text,None,'.')['lyrics'],text)
+    def test_pickup_phrase_is_not_split_into_a_one_word_intro(self):
+        with tempfile.TemporaryDirectory() as folder:
+            score = Path(folder) / 'scores/melody'
+            score.mkdir(parents=True)
+            (score / 'structure.lab').write_text('0.01 0.41 intro\n0.41 15.62 verse\n')
+            data = {'text': 'Long ago,', 'words': [
+                {'text': 'Long', 'start': .36, 'end': 2.002},
+                {'text': 'ago,', 'start': 2.202, 'end': 2.563}]}
+            before = copy.deepcopy(data)
+            self.assertEqual(prepare(data['text'],data,folder)['lyrics'], '[Verse]\nLong ago,')
+            self.assertEqual(data,before)
     def test_missing_analysis_does_not_invent_structure(self):
         self.assertTrue(prepare('hello',None,'.')['error'])
