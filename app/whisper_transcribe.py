@@ -45,6 +45,9 @@ def timing_view(transcription, lyrics, folder):
     current = normalized(transcription["text"]) == normalized(lyrics or "")
     notes = []
     path = Path(folder) / "scores/vocal-melody/analysis-complete.json"
+    direct = Path(folder) / 'scores/direct-song/analysis-complete.json'
+    if direct.is_file():
+        path = direct
     if path.is_file():
         for event in json.loads(path.read_text(encoding="utf-8"))["events"]:
             for note in event.get("values", {}).get("melody", []):

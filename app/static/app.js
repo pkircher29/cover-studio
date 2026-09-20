@@ -111,7 +111,7 @@ function showPreparedSong(data) {
   $("vocalPreview").hidden = !data.ready;
   if (data.ready) {
     $("vocalAudio").src = data.vocals_url;
-    $("melodySummary").textContent = `${data.melody.vocal_notes} vocal notes from isolated vocals · ${data.melody.instrumental_notes} instrumental notes from the full song`;
+    $("melodySummary").textContent = `${data.melody.vocal_notes} vocal notes · ${data.melody.instrumental_notes} instrumental notes · direct SheetSage2 score from the full recording`;
     unlock(lyricsPanel);
     unlock(stylesPanel);
   }

@@ -680,6 +680,13 @@ async def delete_style(style_id: str):
 
 
 SESSIONS: dict[str, Session] = session_store.load_all()
+for _session in SESSIONS.values():
+    if _session.melody and _session.melody.get('vocal_source') == 'stems/vocals.wav':
+        # Keep the old analysis files and covers, but never silently reuse a
+        # combined score after switching back to the direct model export.
+        _session.melody = None
+        _session.ready = False
+        _session.error = 'Resume preparation to rebuild the melody from the full recording. Saved lyrics and vocals will be reused.'
 
 
 def _save_session_batch(session: Session, batch: Batch) -> None:
@@ -913,6 +920,8 @@ async def generate_covers(
         raise HTTPException(409, "A cover is already generating for this song")
     if cot not in ("melody", "full", "off"):
         raise HTTPException(status_code=400, detail="Unknown melody adherence mode")
+    if cot == 'full' and 'full_abc' not in session.melody:
+        raise HTTPException(400, 'Choose Melody mode for the direct SheetSage2 score.')
 
     try:
         style_ids = json.loads(styles)
