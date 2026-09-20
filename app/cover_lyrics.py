@@ -33,27 +33,37 @@ def prepare(lyrics, transcription, folder):
             raise ValueError('No song sections')
         lines, phrase, previous, last_section = [], [], None, None
         def flush():
+            nonlocal last_section
             if phrase:
-                lines.append(' '.join(phrase))
+                # Keep a vocal phrase together. A pickup can begin just before
+                # a detected section boundary; onset alone mislabels it.
+                overlap = {}
+                for _, word in phrase:
+                    for start, end, label in sections:
+                        overlap[label] = overlap.get(label, 0) + max(
+                            0, min(float(word['end']), end) - max(float(word['start']), start))
+                if max(overlap.values()) > 0:
+                    label = max(overlap, key=overlap.get)
+                else:
+                    onset = float(phrase[0][1]['start'])
+                    index = max((i for i, s in enumerate(sections) if s[0] <= onset), default=0)
+                    label = sections[index][2]
+                if label != last_section:
+                    if lines:
+                        lines.append('')
+                    lines.append('[' + TAGS[label] + ']')
+                    last_section = label
+                lines.append(' '.join(token for token, _ in phrase))
                 phrase.clear()
         for token, word in zip(lyrics.split(), words):
-            # Assign by onset: a held word crossing a boundary stays in its phrase.
             onset = float(word['start'])
-            index = max((i for i, s in enumerate(sections) if s[0] <= onset), default=0)
-            label = sections[index][2]
-            if label != last_section:
+            if previous is not None and onset - float(previous['end']) >= .45:
                 flush()
-                if lines:
-                    lines.append('')
-                lines.append('[' + TAGS[label] + ']')
-                last_section = label
-            elif previous is not None and (onset - float(previous['end']) >= .45 or len(phrase) >= 12):
-                flush()
-            phrase.append(token)
+            phrase.append((token, word))
             if token.endswith(('.', '!', '?', ';')):
                 flush()
             previous = word
         flush()
-        return {'lyrics': '\n'.join(lines), 'error': None, 'method': 'score-sections-and-word-onsets'}
+        return {'lyrics': '\n'.join(lines), 'error': None, 'method': 'score-sections-and-vocal-phrases'}
     except (ValueError, KeyError, TypeError) as exc:
         return {'lyrics': '', 'error': f'Cannot prepare sectioned lyrics: {exc}', 'method': None}
